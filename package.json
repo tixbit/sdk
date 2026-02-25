@@ -1,6 +1,6 @@
 {
-  "name": "@tixbit/sdk",
-  "version": "0.3.1",
+  "name": "tixbit",
+  "version": "0.1.0",
   "description": "Search events, view seatmaps, browse listings, and buy tickets on TixBit",
   "type": "module",
   "main": "./dist/index.js",
