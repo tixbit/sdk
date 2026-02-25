@@ -113,82 +113,23 @@ export interface GetListingsResult {
   };
 }
 
-// ── x402 Checkout ───────────────────────────────────────────────────────────
+// ── Checkout ────────────────────────────────────────────────────────────────
 
 export interface CheckoutParams {
   /** Listing ID to purchase (from getListings results). */
   listingId: string;
   /** Number of tickets to buy. */
   quantity: number;
-  /** Buyer's email address (for ticket delivery). */
-  buyerEmail: string;
 }
 
-/** Payment requirements returned by the server in a 402 response. */
-export interface PaymentRequirements {
-  x402Version: number;
-  accepts: Array<{
-    scheme: "exact" | "max";
-    network: string;
-    maxAmountRequired: string;
-    resource: string;
-    description: string;
-    mimeType: string;
-    payTo: string;
-    maxTimeoutSeconds: number;
-    asset: string;
-    extra?: Record<string, unknown>;
-  }>;
-}
-
-/** Listing info returned alongside the 402 payment requirements. */
-export interface CheckoutListing {
-  id: string;
-  eventId: string;
-  section: string | null;
-  row: string | null;
-  pricePerTicket: number;
-  totalUsd: number;
+/** A checkout link that the user opens in a browser to complete purchase. */
+export interface CheckoutLink {
+  /** Full URL to the checkout page on tixbit.com. */
+  url: string;
+  /** Listing ID being purchased. */
+  listingId: string;
+  /** Ticket quantity. */
   quantity: number;
-  currency: string;
-}
-
-/** The 402 response before payment is made. */
-export interface CheckoutPaymentRequired {
-  /** HTTP 402 status */
-  status: 402;
-  /** Listing details */
-  listing: CheckoutListing;
-  /** x402 payment requirements (to be signed by client wallet) */
-  paymentRequired: PaymentRequirements;
-  /** Base64-encoded PAYMENT-REQUIRED header value */
-  paymentRequiredHeader: string;
-}
-
-/** Successful checkout result after payment settles. */
-export interface CheckoutResult {
-  success: true;
-  order: {
-    orderId: string;
-    orderNumber: string;
-    purchaseId: string;
-    status: string;
-    quantity: number;
-    totalUsd: number;
-    listing: {
-      id: string;
-      eventId: string;
-      section: string | null;
-      row: string | null;
-    };
-  };
-  payment: {
-    method: "usdc";
-    network: string;
-    transaction: string;
-    payer: string;
-    amountUsdc: string;
-  };
 }
 
 // ── Homepage / Browse ───────────────────────────────────────────────────────

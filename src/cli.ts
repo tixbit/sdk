@@ -21,8 +21,6 @@ import type {
   TixBitListing,
   SeatmapResult,
   SeatmapSection,
-  CheckoutPaymentRequired,
-  CheckoutResult,
 } from "./types.js";
 
 const client = new TixBitClient({
@@ -101,7 +99,7 @@ function handleError(err: unknown): never {
 const program = new Command()
   .name("tixbit")
   .description("Search events, browse listings, and buy tickets on TixBit")
-  .version("0.3.0");
+  .version("0.3.1");
 
 // ── search ──────────────────────────────────────────────────────────────────
 
@@ -223,149 +221,61 @@ program
 
 program
   .command("checkout <listingId>")
-  .description("Buy tickets for a listing using USDC (x402 protocol)")
+  .description("Get a checkout link to buy tickets for a listing")
   .requiredOption("--quantity <n>", "Number of tickets to buy")
-  .requiredOption("--email <email>", "Buyer email for ticket delivery")
-  .option("--wallet-key <key>", "EVM private key (or set WALLET_KEY env)")
   .option("--json", "Output raw JSON", false)
-  .action(
-    async (
-      listingId: string,
-      opts: { quantity: string; email: string; walletKey?: string; json?: boolean },
-    ) => {
-      try {
-        const quantity = parseInt(opts.quantity, 10);
-        if (!Number.isFinite(quantity) || quantity < 1) {
-          process.stderr.write("Error: --quantity must be a positive integer\n");
-          process.exit(1);
-        }
-
-        const walletKey =
-          opts.walletKey ?? process.env.WALLET_KEY ?? process.env.EVM_PRIVATE_KEY;
-
-        const isJson = opts.json === true || (opts.json as unknown) === "true";
-
-        // Step 1: Get payment requirements
-        if (!isJson) {
-          process.stdout.write("\n🔍 Fetching listing details...\n");
-        }
-
-        const checkout = await client.startCheckout({
-          listingId,
-          quantity,
-          buyerEmail: opts.email,
-        });
-
-        if (!isJson) {
-          process.stdout.write(`\n🎟  Checkout Summary\n`);
-          process.stdout.write(`   Listing: ${checkout.listing.id}\n`);
-          if (checkout.listing.section) {
-            process.stdout.write(
-              `   Section: ${checkout.listing.section}${checkout.listing.row ? ` Row ${checkout.listing.row}` : ""}\n`,
-            );
-          }
-          process.stdout.write(`   Quantity: ${checkout.listing.quantity}\n`);
-          process.stdout.write(
-            `   Price: $${checkout.listing.pricePerTicket.toFixed(2)} × ${quantity} = $${checkout.listing.totalUsd.toFixed(2)}\n`,
-          );
-          process.stdout.write(`   Payment: USDC on Base\n`);
-          process.stdout.write(`   Deliver to: ${opts.email}\n\n`);
-        }
-
-        if (!walletKey) {
-          // No wallet key — output payment requirements for manual signing
-          if (isJson) {
-            output(checkout, true);
-          } else {
-            process.stdout.write(
-              "⚠  No wallet key provided. To complete checkout, set WALLET_KEY or --wallet-key.\n\n",
-            );
-            process.stdout.write("Payment requirements (for manual signing):\n");
-            output(checkout.paymentRequired, true);
-            process.stdout.write("\n");
-            process.stdout.write(
-              "Or use the SDK programmatically:\n\n" +
-                "  import { TixBitClient } from '@tixbit/sdk';\n" +
-                "  import { x402Client } from '@x402/core/client';\n" +
-                "  import { ExactEvmScheme } from '@x402/evm/exact/client';\n" +
-                "  import { privateKeyToAccount } from 'viem/accounts';\n\n" +
-                "  const signer = privateKeyToAccount(process.env.WALLET_KEY);\n" +
-                "  const x402 = new x402Client();\n" +
-                "  x402.register('eip155:*', new ExactEvmScheme(signer));\n" +
-                "  // ... sign and submit\n\n",
-            );
-          }
-          return;
-        }
-
-        // Step 2: Sign the payment with the wallet
-        if (!isJson) {
-          process.stdout.write("🔐 Signing payment with wallet...\n");
-        }
-
-        // Dynamic import of x402 + viem (optional peer deps)
-        let paymentSignature: string;
-        try {
-          const { x402Client: X402Client } = await import("@x402/core/client");
-          const { ExactEvmScheme } = await import("@x402/evm/exact/client");
-          const { privateKeyToAccount } = await import("viem/accounts");
-
-          const signer = privateKeyToAccount(walletKey as `0x${string}`);
-          const x402 = new X402Client();
-          x402.register("eip155:*", new ExactEvmScheme(signer));
-
-          // Sign the first accepted payment requirement
-          const requirement = checkout.paymentRequired.accepts[0];
-          if (!requirement) {
-            throw new Error("No payment requirements returned by server");
-          }
-
-          paymentSignature = await x402.createPaymentHeader(requirement);
-        } catch (importErr) {
-          const msg =
-            importErr instanceof Error ? importErr.message : String(importErr);
-          if (msg.includes("Cannot find module") || msg.includes("MODULE_NOT_FOUND")) {
-            process.stderr.write(
-              "\nError: x402 payment dependencies not installed.\n" +
-                "Install them with:\n\n" +
-                "  npm install @x402/core @x402/evm viem\n\n",
-            );
-            process.exit(1);
-          }
-          throw importErr;
-        }
-
-        // Step 3: Submit signed payment
-        if (!isJson) {
-          process.stdout.write("💸 Submitting payment...\n");
-        }
-
-        const result = await client.submitCheckoutPayment({
-          listingId,
-          quantity,
-          buyerEmail: opts.email,
-          paymentSignature,
-        });
-
-        if (isJson) {
-          output(result, true);
-        } else {
-          process.stdout.write("\n🎉 Purchase Complete!\n\n");
-          process.stdout.write(`   Order ID: ${result.order.orderId}\n`);
-          process.stdout.write(`   Order #: ${result.order.orderNumber}\n`);
-          process.stdout.write(`   Status: ${result.order.status}\n`);
-          process.stdout.write(`   Total: $${result.order.totalUsd.toFixed(2)} USDC\n`);
-          process.stdout.write(`   TX: ${result.payment.transaction}\n`);
-          process.stdout.write(`   Network: ${result.payment.network}\n\n`);
-          process.stdout.write(
-            `   Tickets will be delivered to: ${opts.email}\n\n`,
-          );
-        }
-      } catch (err) {
-        handleError(err);
+  .action(async (listingId: string, opts: { quantity: string; json?: boolean }) => {
+    try {
+      const quantity = parseInt(opts.quantity, 10);
+      if (!Number.isFinite(quantity) || quantity < 1) {
+        process.stderr.write("Error: --quantity must be a positive integer\n");
+        process.exit(1);
       }
-    },
-  );
+
+      const isJson = opts.json === true || (opts.json as unknown) === "true";
+
+      // Fetch listing details to show context
+      let listingInfo: TixBitListing | undefined;
+      try {
+        const result = await client.getListings({ eventId: listingId, size: 1 });
+        // If the user passed a listing ID (not event ID), search by listing
+        if (result.listings.length > 0) {
+          listingInfo = result.listings.find((l) => l.id === listingId);
+        }
+      } catch {
+        // Listing fetch failed — not critical, we can still generate the link
+      }
+
+      const link = client.createCheckoutLink({ listingId, quantity });
+
+      if (isJson) {
+        output({ ...link, listing: listingInfo ?? null }, true);
+        return;
+      }
+
+      process.stdout.write("\n🎟  Checkout Link\n\n");
+
+      if (listingInfo) {
+        process.stdout.write(`   Listing: ${listingInfo.id}\n`);
+        if (listingInfo.section) {
+          process.stdout.write(
+            `   Section: ${listingInfo.section}${listingInfo.row ? ` Row ${listingInfo.row}` : ""}\n`,
+          );
+        }
+        process.stdout.write(
+          `   Price: $${listingInfo.price.toFixed(2)} × ${quantity} = $${(listingInfo.price * quantity).toFixed(2)}\n`,
+        );
+      }
+
+      process.stdout.write(`   Quantity: ${quantity}\n\n`);
+      process.stdout.write(`   ${link.url}\n\n`);
+      process.stdout.write(
+        "   Open the link above in your browser to complete checkout.\n\n",
+      );
+    } catch (err) {
+      handleError(err);
+    }
+  });
 
 // ── seatmap ─────────────────────────────────────────────────────────────────
 

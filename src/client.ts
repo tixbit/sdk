@@ -20,9 +20,7 @@ import type {
   SeatmapZone,
   SeatmapSection,
   CheckoutParams,
-  CheckoutPaymentRequired,
-  CheckoutResult,
-  PaymentRequirements,
+  CheckoutLink,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://tixbit.com";
@@ -41,28 +39,6 @@ export class TixBitClient {
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
-
-  private async rawRequest(path: string, init?: RequestInit): Promise<Response> {
-    const url = `${this.baseUrl}${path}`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      "User-Agent": USER_AGENT,
-      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
-    };
-
-    try {
-      return await fetch(url, {
-        ...init,
-        headers: { ...headers, ...(init?.headers as Record<string, string>) },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-  }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const url = `${this.baseUrl}${path}`;
@@ -206,124 +182,34 @@ export class TixBitClient {
     };
   }
 
-  // ── x402 Checkout ──────────────────────────────────────────────────────────
+  // ── Checkout Link ──────────────────────────────────────────────────────────
 
   /**
-   * Start a checkout for a listing. Returns payment requirements (402 response).
+   * Create a checkout link for a listing.
    *
-   * This is step 1 of the x402 checkout flow. The returned payment requirements
-   * should be signed by an EVM wallet and submitted back via `submitCheckoutPayment()`.
+   * Returns a URL to the TixBit checkout page where the user can
+   * sign in and complete their purchase (card, crypto, etc.).
    *
    * @example
    * ```ts
-   * // Step 1: Get payment requirements
-   * const checkout = await client.startCheckout({
+   * const link = client.createCheckoutLink({
    *   listingId: "P2JO5OBX",
    *   quantity: 2,
-   *   buyerEmail: "fan@example.com",
    * });
    *
-   * console.log(checkout.listing.totalUsd); // 47.60
-   * console.log(checkout.paymentRequired);  // { accepts: [...] }
-   *
-   * // Step 2: Sign and submit payment (see submitCheckoutPayment)
+   * console.log(link.url);
+   * // → "https://tixbit.com/checkout/process?listing=P2JO5OBX&quantity=2"
    * ```
    */
-  async startCheckout(params: CheckoutParams): Promise<CheckoutPaymentRequired> {
-    const res = await this.rawRequest("/api/x402/checkout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        listingId: params.listingId,
-        quantity: params.quantity,
-        buyerEmail: params.buyerEmail,
-      }),
-    });
-
-    if (res.status !== 402) {
-      const text = await res.text().catch(() => "");
-      if (res.ok) {
-        throw new TixBitApiError(
-          "Expected 402 Payment Required but got 200 — payment may have already been made",
-          res.status,
-          `${this.baseUrl}/api/x402/checkout`,
-        );
-      }
-      throw new TixBitApiError(
-        `Checkout failed: ${res.status} ${res.statusText}: ${text.slice(0, 300)}`,
-        res.status,
-        `${this.baseUrl}/api/x402/checkout`,
-      );
-    }
-
-    const paymentRequiredHeader = res.headers.get("PAYMENT-REQUIRED") ?? "";
-    const body = (await res.json()) as {
-      listing: CheckoutPaymentRequired["listing"];
-      paymentRequired: PaymentRequirements;
-    };
+  createCheckoutLink(params: CheckoutParams): CheckoutLink {
+    const quantity = Math.max(1, Math.min(8, Math.round(params.quantity)));
+    const url = `${this.baseUrl}/checkout/process?listing=${encodeURIComponent(params.listingId)}&quantity=${quantity}`;
 
     return {
-      status: 402,
-      listing: body.listing,
-      paymentRequired: body.paymentRequired,
-      paymentRequiredHeader,
+      url,
+      listingId: params.listingId,
+      quantity,
     };
-  }
-
-  /**
-   * Submit a signed x402 payment to complete checkout.
-   *
-   * This is step 2 of the x402 checkout flow. Pass the base64-encoded
-   * PAYMENT-SIGNATURE header value (produced by @x402/evm or similar).
-   *
-   * @example
-   * ```ts
-   * import { x402Client } from "@x402/core/client";
-   * import { ExactEvmScheme } from "@x402/evm/exact/client";
-   * import { privateKeyToAccount } from "viem/accounts";
-   *
-   * const signer = privateKeyToAccount(process.env.WALLET_KEY as `0x${string}`);
-   * const x402 = new x402Client();
-   * x402.register("eip155:*", new ExactEvmScheme(signer));
-   *
-   * // Sign the payment requirements
-   * const paymentSignature = await x402.createPaymentHeader(
-   *   checkout.paymentRequired.accepts[0]
-   * );
-   *
-   * // Submit to complete purchase
-   * const result = await client.submitCheckoutPayment({
-   *   listingId: "P2JO5OBX",
-   *   quantity: 2,
-   *   buyerEmail: "fan@example.com",
-   *   paymentSignature, // base64 string
-   * });
-   *
-   * console.log(result.order.orderId);
-   * console.log(result.payment.transaction); // on-chain tx hash
-   * ```
-   */
-  async submitCheckoutPayment(params: {
-    listingId: string;
-    quantity: number;
-    buyerEmail: string;
-    /** Base64-encoded PAYMENT-SIGNATURE header value */
-    paymentSignature: string;
-  }): Promise<CheckoutResult> {
-    const data = await this.request<CheckoutResult>("/api/x402/checkout", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "PAYMENT-SIGNATURE": params.paymentSignature,
-      },
-      body: JSON.stringify({
-        listingId: params.listingId,
-        quantity: params.quantity,
-        buyerEmail: params.buyerEmail,
-      }),
-    });
-
-    return data;
   }
 
   // ── Event URL helper ──────────────────────────────────────────────────────
