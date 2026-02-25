@@ -1,5 +1,5 @@
 ---
-name: tixbit-sdk
+name: tixbit
 description: Use the official TixBit SDK/CLI to search events, browse by location, inspect listings, view seatmaps, and generate checkout links. Trigger when a user asks to find tickets, compare sections/prices, or create a TixBit checkout URL.
 ---
 
