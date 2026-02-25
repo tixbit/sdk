@@ -43,6 +43,47 @@ tixbit listings 4BKJMDZ
 tixbit listings 4BKJMDZ --size 5 --sort asc
 ```
 
+### Buy tickets with USDC (x402)
+
+```sh
+# Full checkout — search, pick, pay
+tixbit listings 4BKJMDZ --size 3
+tixbit checkout P2JO5OBX --quantity 2 --email fan@example.com --wallet-key 0x...
+
+# Or use environment variable for the wallet key
+export WALLET_KEY=0x...
+tixbit checkout P2JO5OBX --quantity 2 --email fan@example.com
+```
+
+```
+🔍 Fetching listing details...
+
+🎟  Checkout Summary
+   Listing: P2JO5OBX
+   Section: 214 Row E
+   Quantity: 2
+   Price: $23.80 × 2 = $47.60
+   Payment: USDC on Base
+   Deliver to: fan@example.com
+
+🔐 Signing payment with wallet...
+💸 Submitting payment...
+
+🎉 Purchase Complete!
+
+   Order ID: ord_abc123
+   Order #: TXB-2025-0001
+   Status: confirmed
+   Total: $47.60 USDC
+   TX: 0x1234...abcd
+   Network: base
+
+   Tickets will be delivered to: fan@example.com
+```
+
+> **Prerequisites for checkout:** Your wallet needs USDC on Base network.
+> Install payment deps: `npm install @x402/core @x402/evm viem`
+
 ### View venue seatmap
 
 ```sh
@@ -87,6 +128,7 @@ tixbit seatmap 4BKJMDZ --json
 | `search [query]` | Search events by keyword, city, state, category, or date |
 | `browse` | Browse upcoming events near a location |
 | `listings <eventId>` | Get available ticket listings for an event |
+| `checkout <listingId>` | Buy tickets with USDC via x402 protocol |
 | `seatmap <eventId>` | Show the venue seating chart with all sections |
 | `url <slug>` | Print the TixBit event page URL |
 
@@ -117,6 +159,20 @@ const seatmap = await tixbit.getSeatmap({
 });
 console.log(seatmap.venue_name);    // "State Farm Arena"
 console.log(seatmap.section_names); // ["101", "102", ...]
+
+// Buy tickets with USDC (x402)
+const checkout = await tixbit.startCheckout({
+  listingId: listings[0].id,
+  quantity: 2,
+  buyerEmail: "fan@example.com",
+});
+console.log(checkout.listing.totalUsd); // 47.60
+
+// Sign with your wallet (requires @x402/core, @x402/evm, viem)
+// const result = await tixbit.submitCheckoutPayment({
+//   ...checkout params,
+//   paymentSignature: signedPayload,
+// });
 
 // Browse nearby
 const nearby = await tixbit.browse({
@@ -180,6 +236,31 @@ const url = tixbit.eventUrl("4BKJMDZ");
 
 Returns venue info, section list, zone groupings, and background image URL.
 
+### `startCheckout(params)`
+
+Start the x402 checkout flow. Returns 402 payment requirements.
+
+| Param | Type | Description |
+|---|---|---|
+| `listingId` | `string` | Listing ID to purchase |
+| `quantity` | `number` | Number of tickets |
+| `buyerEmail` | `string` | Email for ticket delivery |
+
+Returns `CheckoutPaymentRequired` with listing details, payment requirements, and the base64-encoded `PAYMENT-REQUIRED` header.
+
+### `submitCheckoutPayment(params)`
+
+Complete checkout by submitting a signed x402 payment.
+
+| Param | Type | Description |
+|---|---|---|
+| `listingId` | `string` | Listing ID |
+| `quantity` | `number` | Number of tickets |
+| `buyerEmail` | `string` | Email for delivery |
+| `paymentSignature` | `string` | Base64 PAYMENT-SIGNATURE (from @x402/evm) |
+
+Returns `CheckoutResult` with order ID, purchase ID, transaction hash, and payment details.
+
 ### `eventUrl(slugOrId)`
 
 Returns the full URL to the event page on tixbit.com.
@@ -190,10 +271,13 @@ Returns the full URL to the event page on tixbit.com.
 |---|---|---|
 | `TIXBIT_BASE_URL` | Override the TixBit URL | `https://tixbit.com` |
 | `TIXBIT_API_KEY` | API key (reserved for future use) | — |
+| `WALLET_KEY` | EVM private key for x402 checkout | — |
+| `EVM_PRIVATE_KEY` | Alternative env var for wallet key | — |
 
 ## Requirements
 
 - Node.js 20+
+- For checkout: `npm install @x402/core @x402/evm viem`
 
 ## License
 
