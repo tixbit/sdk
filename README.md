@@ -1,4 +1,4 @@
-# @tixbit/sdk
+# tixbit
 
 Search events, view seatmaps, browse listings, and buy tickets on [TixBit](https://tixbit.com) — from the terminal, your code, or an AI agent.
 
@@ -8,14 +8,14 @@ No API key required.
 
 ```sh
 # Use instantly with npx (no install)
-npx @tixbit/sdk search "Hawks" --state GA
+npx tixbit search "Hawks" --state GA
 
 # Or install globally
-npm install -g @tixbit/sdk
+npm install -g tixbit
 tixbit search "Hawks" --state GA
 
 # Or add to a project
-npm install @tixbit/sdk
+npm install tixbit
 ```
 
 ## CLI
@@ -113,7 +113,7 @@ tixbit checkout P2JO5OBX --quantity 2 --json
 Use the client programmatically in any Node.js 20+ project:
 
 ```ts
-import { TixBitClient } from "@tixbit/sdk";
+import { TixBitClient } from "tixbit";
 
 const tixbit = new TixBitClient();
 

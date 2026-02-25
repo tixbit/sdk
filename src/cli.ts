@@ -99,7 +99,7 @@ function handleError(err: unknown): never {
 const program = new Command()
   .name("tixbit")
   .description("Search events, browse listings, and buy tickets on TixBit")
-  .version("0.3.1");
+  .version("0.1.0");
 
 // ── search ──────────────────────────────────────────────────────────────────
 
