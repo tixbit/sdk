@@ -1,0 +1,68 @@
+{
+  "name": "@tixbit/sdk",
+  "version": "0.2.0",
+  "description": "Search events, view seatmaps, browse listings, and buy tickets on TixBit",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "tixbit": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "tixbit",
+    "tickets",
+    "events",
+    "seatmap",
+    "seating-chart",
+    "cli",
+    "sdk",
+    "concerts",
+    "sports",
+    "nba",
+    "mlb",
+    "nfl"
+  ],
+  "homepage": "https://tixbit.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tixbit/sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tixbit/sdk/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
