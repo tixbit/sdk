@@ -27,6 +27,26 @@ const DEFAULT_BASE_URL = "https://tixbit.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const USER_AGENT = "@tixbit/sdk";
 
+function normalizeExternalEventId(eventId: string): string {
+  if (!eventId) return eventId;
+
+  const trimmed = eventId.trim();
+  const providerPrefixedId = trimmed.match(/^([a-z]{5,})-([A-Z0-9]{6,})$/i);
+  if (providerPrefixedId?.[2]) {
+    return providerPrefixedId[2];
+  }
+
+  return trimmed;
+}
+
+function toAbsoluteUrl(baseUrl: string, value: string | null | undefined): string | null {
+  if (!value) return null;
+  if (value.startsWith("http://") || value.startsWith("https://")) {
+    return value;
+  }
+  return `${baseUrl}${value.startsWith("/") ? "" : "/"}${value}`;
+}
+
 export class TixBitClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
@@ -163,11 +183,13 @@ export class TixBitClient {
       order_by_direction: params.orderByDirection ?? "asc",
     });
 
+    const normalizedEventId = normalizeExternalEventId(params.eventId);
+
     const data = await this.request<{
       success: boolean;
       data: unknown[];
       meta?: Record<string, unknown>;
-    }>(`/api/events/${encodeURIComponent(params.eventId)}/listings${query}`);
+    }>(`/api/events/${encodeURIComponent(normalizedEventId)}/listings${query}`);
 
     const listings = (data.data ?? []).map(normalizeListing);
 
@@ -218,7 +240,12 @@ export class TixBitClient {
    * Build the direct URL to an event page on tixbit.com.
    */
   eventUrl(slugOrId: string): string {
-    return `${this.baseUrl}/events/${slugOrId}`;
+    if (slugOrId.includes("/")) {
+      return `${this.baseUrl}/events/${slugOrId}`;
+    }
+
+    const normalized = normalizeExternalEventId(slugOrId);
+    return `${this.baseUrl}/events/${normalized}`;
   }
 
   // ── Seatmap ───────────────────────────────────────────────────────────────
@@ -238,6 +265,8 @@ export class TixBitClient {
    * ```
    */
   async getSeatmap(params: GetSeatmapParams): Promise<SeatmapResult> {
+    const normalizedEventId = normalizeExternalEventId(params.eventId);
+
     const data = await this.request<{
       success: boolean;
       event_id: string;
@@ -247,6 +276,7 @@ export class TixBitClient {
       configuration_name: string;
       background_image?: string;
       coordinates?: string;
+      coordinates_url?: string;
       has_coordinates: boolean;
       capacity?: number;
       venue_data: {
@@ -257,18 +287,18 @@ export class TixBitClient {
         country: string;
         time_zone: string;
       };
-    }>(`/api/events/${encodeURIComponent(params.eventId)}/seating-chart`);
+    }>(`/api/events/${encodeURIComponent(normalizedEventId)}/seating-chart`);
 
     // Parse coordinates if available
     let zones: SeatmapZone[] = [];
     let sectionNames: string[] = [];
 
-    if (data.has_coordinates && data.coordinates) {
+    const coordinatesUrl = data.coordinates_url ?? data.coordinates ?? null;
+
+    if (data.has_coordinates && coordinatesUrl) {
       try {
-        zones = await this.fetchAndParseCoordinates(data.coordinates);
-        sectionNames = zones.flatMap((z) =>
-          z.sections.map((s) => s.name),
-        );
+        zones = await this.fetchAndParseCoordinates(coordinatesUrl);
+        sectionNames = zones.flatMap((z) => z.sections.map((s) => s.name));
       } catch {
         // Coordinates fetch failed — return without section data
       }
@@ -276,13 +306,13 @@ export class TixBitClient {
 
     return {
       success: data.success,
-      event_id: data.event_id,
+      event_id: normalizeExternalEventId(data.event_id),
       venue_id: data.venue_id,
       venue_name: data.venue_name,
       configuration_id: data.configuration_id,
       configuration_name: data.configuration_name,
-      background_image: data.background_image ?? null,
-      coordinates_url: data.coordinates ?? null,
+      background_image: toAbsoluteUrl(this.baseUrl, data.background_image ?? null),
+      coordinates_url: toAbsoluteUrl(this.baseUrl, coordinatesUrl),
       has_coordinates: data.has_coordinates,
       capacity: data.capacity ?? null,
       venue: data.venue_data,
@@ -323,7 +353,16 @@ export class TixBitClient {
           sections?: Array<{
             id: string;
             name: string;
-            labels?: Array<{ text: string; x: number; y: number }>;
+            labels?: Array<{
+              text: string;
+              x: number;
+              y: number;
+              size?: number;
+              angle?: number;
+            }>;
+            shape?: {
+              path?: string;
+            };
           }>;
         }>;
       };
@@ -334,12 +373,34 @@ export class TixBitClient {
         id: zone.id,
         name: zone.name,
         sections: (zone.sections ?? []).map((section) => {
-          const label = section.labels?.[0];
+          const labels = Array.isArray(section.labels)
+            ? section.labels
+                .filter((label) => label && typeof label.text === "string")
+                .map((label) => ({
+                  text: label.text,
+                  x: typeof label.x === "number" ? label.x : 0,
+                  y: typeof label.y === "number" ? label.y : 0,
+                  size: typeof label.size === "number" ? label.size : undefined,
+                  angle: typeof label.angle === "number" ? label.angle : undefined,
+                }))
+            : [];
+
+          const primaryLabel =
+            labels.find((label) => label.text.toUpperCase() === section.name.toUpperCase()) ??
+            labels[0];
+
+          const shapePath =
+            section.shape && typeof section.shape.path === "string"
+              ? section.shape.path
+              : null;
+
           return {
             id: section.id,
             name: section.name,
-            x: label?.x ?? 0,
-            y: label?.y ?? 0,
+            x: primaryLabel?.x ?? 0,
+            y: primaryLabel?.y ?? 0,
+            labels,
+            shape_path: shapePath,
           };
         }),
       }));
@@ -355,10 +416,18 @@ export class TixBitClient {
 
 function normalizeEvent(raw: unknown): TixBitEvent {
   const e = raw as Record<string, unknown>;
+
+  const rawId =
+    str(e.external_event_id) ??
+    str(e.externalEventId) ??
+    str(e.id) ??
+    "";
+  const externalEventId = normalizeExternalEventId(rawId);
+
   return {
-    id: str(e.id) ?? str(e.external_event_id) ?? "",
-    external_event_id: str(e.external_event_id) ?? str(e.externalEventId) ?? str(e.id) ?? "",
-    slug: str(e.slug) ?? str(e.external_event_id) ?? "",
+    id: externalEventId,
+    external_event_id: externalEventId,
+    slug: str(e.slug) ?? externalEventId,
     name: str(e.name) ?? str(e.performer) ?? "",
     date: resolveDate(e),
     venue_name: str(e.venue_name) ?? str(e.venueName) ?? null,

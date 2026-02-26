@@ -161,6 +161,14 @@ export interface GetSeatmapParams {
   eventId: string;
 }
 
+export interface SeatmapLabel {
+  text: string;
+  x: number;
+  y: number;
+  size?: number;
+  angle?: number;
+}
+
 /** A single section in the venue's seating chart. */
 export interface SeatmapSection {
   /** Section ID (e.g. "80841"). */
@@ -168,11 +176,18 @@ export interface SeatmapSection {
   /** Human-readable section name (e.g. "101", "FLOOR3", "201"). */
   name: string;
   /**
-   * Center coordinates of the section label on the map.
-   * Useful for understanding relative position.
+   * Primary label anchor for simple renderers and relative position helpers.
    */
   x: number;
   y: number;
+  /**
+   * All labels from the seatmap payload (useful for richer rendering).
+   */
+  labels: SeatmapLabel[];
+  /**
+   * SVG path for drawing the section shape overlay.
+   */
+  shape_path: string | null;
 }
 
 /** A zone grouping sections (e.g. "Section", "Floor", "Suite"). */
