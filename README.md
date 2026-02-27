@@ -90,6 +90,8 @@ tixbit seatmap 4BKJMDZ --section 214
 
 Every command supports `--json` for machine-readable output:
 
+> Event IDs are normalized to public external IDs (e.g. `36PB9ZN`) — internal provider prefixes are stripped from SDK/CLI results.
+
 ```sh
 tixbit search "concert" --state NY --json
 tixbit listings 4BKJMDZ --json
@@ -215,7 +217,7 @@ Returns `{ url, listingId, quantity }`.
 |---|---|---|
 | `eventId` | `string` | External event ID |
 
-Returns venue info, section list, zone groupings, and background image URL.
+Returns venue info, section list, zone groupings, absolute asset URLs (`background_image`, `coordinates_url`), and per-section `shape_path` data for overlay rendering.
 
 ### `eventUrl(slugOrId)`
 

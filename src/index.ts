@@ -13,6 +13,7 @@ export type {
   CheckoutLink,
   GetSeatmapParams,
   SeatmapResult,
+  SeatmapLabel,
   SeatmapSection,
   SeatmapZone,
   SeatmapVenue,
