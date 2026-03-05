@@ -33,7 +33,11 @@ function normalizeExternalEventId(eventId: string): string {
   const trimmed = eventId.trim();
   const providerPrefixedId = trimmed.match(/^([a-z]{5,})-([A-Z0-9]{6,})$/i);
   if (providerPrefixedId?.[2]) {
-    return providerPrefixedId[2];
+    return providerPrefixedId[2].toUpperCase();
+  }
+
+  if (/^[A-Z0-9]{6,}$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
   }
 
   return trimmed;
@@ -196,9 +200,9 @@ export class TixBitClient {
     return {
       listings,
       meta: {
-        total: (data.meta?.total as number) ?? listings.length,
-        page: (data.meta?.page as number) ?? params.page ?? 1,
-        size: (data.meta?.size as number) ?? params.size ?? 50,
+        total: readListingMetaNumber(data.meta, "total_count", "total") ?? listings.length,
+        page: readListingMetaNumber(data.meta, "current_page_number", "page") ?? params.page ?? 1,
+        size: readListingMetaNumber(data.meta, "current_page_size", "size") ?? params.size ?? 50,
         cacheSource: data.meta?.cacheSource as string | undefined,
       },
     };
@@ -496,6 +500,20 @@ function str(v: unknown): string | null {
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readListingMetaNumber(
+  meta: Record<string, unknown> | undefined,
+  ...keys: string[]
+): number | null {
+  if (!meta) return null;
+
+  for (const key of keys) {
+    const value = num(meta[key]);
+    if (value !== null) return value;
+  }
+
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

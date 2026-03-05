@@ -65,6 +65,46 @@ describe("TixBitClient", () => {
     expect(String(url)).not.toContain("provider-36PB9ZN");
   });
 
+  it("uppercases lowercase external event ids for listings requests", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({ success: true, data: [], meta: { total_count: 0, current_page_number: 1, current_page_size: 100 } }),
+    );
+
+    const client = new TixBitClient();
+    await client.getListings({ eventId: "pdgv2z63", size: 100 });
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const [url] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+    expect(String(url)).toContain("/api/events/PDGV2Z63/listings");
+    expect(String(url)).not.toContain("/api/events/pdgv2z63/listings");
+  });
+
+  it("maps listings pagination metadata from the live api shape", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        data: [{ id: "listing-1", price_per_ticket: 42, quantity: 2, listing_hash: "hash-1" }],
+        meta: {
+          total_count: 2272,
+          current_page_number: 2,
+          current_page_size: 100,
+          cacheSource: "cache",
+        },
+      }),
+    );
+
+    const client = new TixBitClient();
+    const result = await client.getListings({ eventId: "PDGV2Z63", page: 2, size: 100 });
+
+    expect(result.listings).toHaveLength(1);
+    expect(result.meta).toEqual({
+      total: 2272,
+      page: 2,
+      size: 100,
+      cacheSource: "cache",
+    });
+  });
+
   it("returns absolute seatmap asset URLs and section shape paths", async () => {
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce(
