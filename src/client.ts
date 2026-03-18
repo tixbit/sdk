@@ -21,6 +21,10 @@ import type {
   SeatmapSection,
   CheckoutParams,
   CheckoutLink,
+  PurchaseParams,
+  PurchasePaymentRequired,
+  PurchaseResult,
+  PurchaseError,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://tixbit.com";
@@ -236,6 +240,97 @@ export class TixBitClient {
       listingId: params.listingId,
       quantity,
     };
+  }
+
+  // ── Purchase (MPP) ─────────────────────────────────────────────────────────
+
+  /**
+   * Purchase tickets for a listing via the MPP payment protocol.
+   *
+   * On the first call the server returns a `402 Payment Required` response
+   * with an MPP challenge. Agent runtimes with MPP support (e.g. `mppx/client`)
+   * handle the payment automatically and retry. If your runtime does not
+   * handle 402 automatically, inspect the returned `PurchasePaymentRequired`
+   * object and fulfill the challenge manually.
+   *
+   * @example
+   * ```ts
+   * const result = await client.purchaseTickets({
+   *   listingId: "P2JO5OBX",
+   *   quantity: 2,
+   *   email: "fan@example.com",
+   * });
+   *
+   * if (result.status === "payment_required") {
+   *   // fulfill result.challenge via MPP and retry
+   * } else if (result.status === "success") {
+   *   console.log(result.order.purchaseId);
+   * }
+   * ```
+   */
+  async purchaseTickets(
+    params: PurchaseParams,
+  ): Promise<PurchasePaymentRequired | PurchaseResult | PurchaseError> {
+    const quantity = Math.max(1, Math.min(8, Math.round(params.quantity)));
+
+    const url = `${this.baseUrl}/api/purchase`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": USER_AGENT,
+      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+    };
+
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          listingId: params.listingId,
+          quantity,
+          email: params.email,
+        }),
+        signal: controller.signal,
+      });
+
+      if (res.status === 402) {
+        const challenge = res.headers.get("www-authenticate") ?? "";
+        const details = await res.json().catch(() => ({}));
+        return {
+          status: "payment_required" as const,
+          challenge,
+          details: details as Record<string, unknown>,
+        };
+      }
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        return {
+          status: "error" as const,
+          error: (body as Record<string, string>).error ?? `HTTP ${res.status}`,
+        };
+      }
+
+      const body = await res.json();
+      const data = body as { success?: boolean; order?: PurchaseResult["order"]; error?: string };
+
+      if (!data.success || !data.order) {
+        return {
+          status: "error" as const,
+          error: data.error ?? "Purchase failed",
+        };
+      }
+
+      return {
+        status: "success" as const,
+        order: data.order,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ── Event URL helper ──────────────────────────────────────────────────────
