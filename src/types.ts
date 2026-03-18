@@ -132,6 +132,51 @@ export interface CheckoutLink {
   quantity: number;
 }
 
+// ── Purchase (MPP) ──────────────────────────────────────────────────────────
+
+export interface PurchaseParams {
+  /** Listing ID to purchase (from getListings results). */
+  listingId: string;
+  /** Number of tickets to buy (1–8). */
+  quantity: number;
+  /** Buyer email for order confirmation. */
+  email: string;
+}
+
+/**
+ * Returned when the server requires payment before completing the purchase.
+ * The `challenge` header contains the MPP `WWW-Authenticate: Payment` value
+ * that the client runtime must fulfill and retry with.
+ */
+export interface PurchasePaymentRequired {
+  status: "payment_required";
+  /** Raw `WWW-Authenticate: Payment` header value. */
+  challenge: string;
+  /** Problem details body from the 402 response. */
+  details: Record<string, unknown>;
+}
+
+/** Returned after payment is verified and the order is completed. */
+export interface PurchaseResult {
+  status: "success";
+  order: {
+    purchaseId: string;
+    listingId: string;
+    quantity: number;
+    pricePerTicket: number;
+    total: number;
+    currency: string;
+    section: string | null;
+    row: string | null;
+  };
+}
+
+/** Returned when the purchase request itself fails (before payment). */
+export interface PurchaseError {
+  status: "error";
+  error: string;
+}
+
 // ── Homepage / Browse ───────────────────────────────────────────────────────
 
 export interface BrowseEventsParams {
