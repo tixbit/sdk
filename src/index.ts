@@ -1,12 +1,15 @@
-export { TixBitClient, TixBitApiError } from "./client.js";
+export { TixBitClient, TixBitApiError, TixBitTimeoutError } from "./client.js";
 export type {
   TixBitConfig,
   SearchEventsParams,
   SearchEventsResult,
   TixBitEvent,
+  TixBitEventDetail,
   GetListingsParams,
   GetListingsResult,
   TixBitListing,
+  TixBitListingDisclosure,
+  GetListingResult,
   BrowseEventsParams,
   BrowseEventsResult,
   CheckoutParams,
@@ -17,4 +20,6 @@ export type {
   SeatmapSection,
   SeatmapZone,
   SeatmapVenue,
+  ParkingFilter,
+  LocationMode,
 } from "./types.js";
