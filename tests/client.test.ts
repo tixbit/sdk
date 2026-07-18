@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TixBitClient } from "../src/client.js";
+import { readFileSync } from "node:fs";
+import {
+  TixBitApiError,
+  TixBitClient,
+  TixBitTimeoutError,
+} from "../src/client.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -25,12 +30,19 @@ describe("TixBitClient", () => {
       jsonResponse({
         events: [
           {
-            id: "provider-36PB9ZN",
-            external_event_id: "36PB9ZN",
+            id: "provider-EVENT123",
+            external_event_id: "EVENT123",
             name: "Orlando Magic at Atlanta Hawks",
             date: "2026-03-16T19:00:00.000Z",
             has_listings: true,
-            inventory: { total_available: 12, min_price: 17.57, max_price: 250 },
+            category_slug: "nba-basketball",
+            metadata: { attraction: "Atlanta Hawks" },
+            inventory: {
+              total_available: 12,
+              min_price: 17.57,
+              max_price: 250,
+              sources: { local: 2, marketplace: 10 },
+            },
           },
         ],
         pagination: {
@@ -40,6 +52,7 @@ describe("TixBitClient", () => {
           totalPages: 1,
           hasNext: false,
           hasPrev: false,
+          totalExact: true,
         },
       }),
     );
@@ -47,8 +60,89 @@ describe("TixBitClient", () => {
     const client = new TixBitClient();
     const result = await client.searchEvents({ query: "hawks", size: 1 });
 
-    expect(result.events[0]?.id).toBe("36PB9ZN");
-    expect(result.events[0]?.external_event_id).toBe("36PB9ZN");
+    expect(result.events[0]?.id).toBe("EVENT123");
+    expect(result.events[0]?.external_event_id).toBe("EVENT123");
+    expect(result.events[0]?.category_slug).toBe("nba-basketball");
+    expect(result.events[0]?.inventory.sources).toEqual({
+      local: 2,
+      marketplace: 10,
+    });
+  });
+
+  it("forwards current public search filters", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        events: [],
+        pagination: {
+          page: 2,
+          size: 200,
+          total: null,
+          totalPages: null,
+          hasNext: true,
+          hasPrev: true,
+          totalExact: false,
+        },
+      }),
+    );
+
+    const client = new TixBitClient();
+    await client.searchEvents({
+      query: "jazz",
+      city: "New York",
+      state: "NY",
+      category: "concerts",
+      league: "NBA",
+      categoryEventType: "CONCERT",
+      performerId: "performer_1",
+      venueId: "venue_1",
+      parkingFilter: "include",
+      nearLat: 40.7,
+      nearLng: -74,
+      locationMode: "manual",
+      startDate: "2026-08-01",
+      endDate: "2026-08-31",
+      page: 2,
+      size: 200,
+    });
+
+    const [input] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+    const url = new URL(String(input));
+    expect(url.origin).toBe("https://www.tixbit.com");
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      q: "jazz",
+      category: "concerts",
+      league: "NBA",
+      categoryEventType: "CONCERT",
+      performerId: "performer_1",
+      venueId: "venue_1",
+      parkingFilter: "include",
+      nearLat: "40.7",
+      nearLng: "-74",
+      locationMode: "manual",
+      page: "2",
+      size: "200",
+    });
+  });
+
+  it("gets normalized public event details", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        id: "provider-EVENT123",
+        external_id: "provider-EVENT123",
+        name: "Example Event",
+        dates: { start: { localDate: "2026-08-01" } },
+      }),
+    );
+
+    const client = new TixBitClient();
+    const result = await client.getEvent("provider-EVENT123");
+
+    expect(result.id).toBe("EVENT123");
+    expect(result.external_id).toBe("EVENT123");
+    expect(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0])).toContain(
+      "/api/events/EVENT123",
+    );
   });
 
   it("uses normalized event ids for listings requests", async () => {
@@ -57,12 +151,12 @@ describe("TixBitClient", () => {
     );
 
     const client = new TixBitClient();
-    await client.getListings({ eventId: "provider-36PB9ZN" });
+    await client.getListings({ eventId: "provider-EVENT123" });
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
-    expect(String(url)).toContain("/api/events/36PB9ZN/listings");
-    expect(String(url)).not.toContain("provider-36PB9ZN");
+    expect(String(url)).toContain("/api/events/EVENT123/listings");
+    expect(String(url)).not.toContain("provider-EVENT123");
   });
 
   it("uppercases lowercase external event ids for listings requests", async () => {
@@ -71,12 +165,12 @@ describe("TixBitClient", () => {
     );
 
     const client = new TixBitClient();
-    await client.getListings({ eventId: "pdgv2z63", size: 100 });
+    await client.getListings({ eventId: "event123", size: 100 });
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
-    expect(String(url)).toContain("/api/events/PDGV2Z63/listings");
-    expect(String(url)).not.toContain("/api/events/pdgv2z63/listings");
+    expect(String(url)).toContain("/api/events/EVENT123/listings");
+    expect(String(url)).not.toContain("/api/events/event123/listings");
   });
 
   it("maps listings pagination metadata from the live api shape", async () => {
@@ -88,21 +182,171 @@ describe("TixBitClient", () => {
           total_count: 2272,
           current_page_number: 2,
           current_page_size: 100,
-          cacheSource: "cache",
+          current_page_total_count: 1,
+          total_pages: 23,
+          cache: true,
+          cache_expires_at: "2026-08-01T00:00:00.000Z",
+          cache_state: "stale",
+          freshness: "cached",
         },
       }),
     );
 
     const client = new TixBitClient();
-    const result = await client.getListings({ eventId: "PDGV2Z63", page: 2, size: 100 });
+    const result = await client.getListings({
+      eventId: "EVENT123",
+      page: 2,
+      size: 100,
+      includeAll: true,
+      refresh: true,
+    });
 
     expect(result.listings).toHaveLength(1);
     expect(result.meta).toEqual({
       total: 2272,
       page: 2,
       size: 100,
-      cacheSource: "cache",
+      totalPages: 23,
+      currentPageTotalCount: 1,
+      cache: true,
+      cacheExpiresAt: "2026-08-01T00:00:00.000Z",
+      cacheState: "stale",
+      freshness: "cached",
     });
+    const url = new URL(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0]));
+    expect(url.searchParams.get("includeAll")).toBe("true");
+    expect(url.searchParams.get("refresh")).toBe("true");
+  });
+
+  it("gets one public listing with disclosures", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        success: true,
+        listing: {
+          id: "LISTING123",
+          event_id: "EVENT123",
+          price_per_ticket: 42,
+          total_price: 84,
+          currency: "USD",
+          quantity: 2,
+          section: "A",
+          seat_from: "1",
+          seat_to: "2",
+          disclosure_ids: ["notice_1"],
+        },
+        disclosures: [{ id: "notice_1", description: "Limited view" }],
+      }),
+    );
+
+    const client = new TixBitClient();
+    const result = await client.getListing("LISTING123");
+
+    expect(result.listing).toMatchObject({
+      id: "LISTING123",
+      event_id: "EVENT123",
+      price: 42,
+      total_price: 84,
+      currency: "USD",
+      seat_from: "1",
+      seat_to: "2",
+      disclosure_ids: ["notice_1"],
+    });
+    expect(result.disclosures).toEqual([
+      { id: "notice_1", description: "Limited view" },
+    ]);
+    expect(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0])).toContain(
+      "/api/listings/LISTING123",
+    );
+  });
+
+  it("preserves browse pagination and recommendation filters", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      jsonResponse({
+        events: [],
+        total: null,
+        totalExact: false,
+        hasMore: true,
+        page: 2,
+        pageSize: 10,
+        degraded: true,
+      }),
+    );
+
+    const client = new TixBitClient();
+    const result = await client.browse({
+      query: "baseball",
+      category: "mlb-baseball",
+      league: "MLB",
+      page: 2,
+      size: 10,
+      city: "Atlanta",
+      state: "GA",
+      context: "events",
+      recommendation: "trending",
+      parkingFilter: "exclude",
+      locationMode: "manual",
+    });
+
+    expect(result).toMatchObject({
+      total: null,
+      totalExact: false,
+      hasMore: true,
+      page: 2,
+      pageSize: 10,
+      degraded: true,
+    });
+    const url = new URL(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0]));
+    expect(Object.fromEntries(url.searchParams)).toMatchObject({
+      query: "baseball",
+      category: "mlb-baseball",
+      league: "MLB",
+      page: "2",
+      size: "10",
+      preferCity: "Atlanta",
+      preferState: "GA",
+      context: "events",
+      recommendation: "trending",
+      parkingFilter: "exclude",
+      locationMode: "manual",
+    });
+  });
+
+  it("creates only validated canonical browser checkout links", () => {
+    const client = new TixBitClient();
+    expect(
+      client.createCheckoutLink({ listingId: " LISTING_123 ", quantity: 2 }),
+    ).toEqual({
+      url: "https://www.tixbit.com/checkout/process?listing=LISTING_123&quantity=2",
+      listingId: "LISTING_123",
+      quantity: 2,
+    });
+    expect(() =>
+      client.createCheckoutLink({ listingId: "../purchase", quantity: 2 }),
+    ).toThrow(TypeError);
+    expect(() =>
+      client.createCheckoutLink({ listingId: "LISTING123", quantity: 9 }),
+    ).toThrow(RangeError);
+  });
+
+  it("returns typed HTTP and timeout errors", async () => {
+    vi.mocked(globalThis.fetch)
+      .mockResolvedValueOnce(jsonResponse({ error: "Unavailable" }, 503))
+      .mockImplementationOnce((_input, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        }),
+      );
+
+    const client = new TixBitClient({ timeoutMs: 5 });
+    const apiError = await client.getEvent("EVENT123").catch((error) => error);
+    expect(apiError).toBeInstanceOf(TixBitApiError);
+    expect(apiError).toMatchObject({ status: 503 });
+
+    const timeoutError = await client.getEvent("EVENT123").catch((error) => error);
+    expect(timeoutError).toBeInstanceOf(TixBitTimeoutError);
+    expect(timeoutError).toMatchObject({ timeoutMs: 5 });
   });
 
   it("returns absolute seatmap asset URLs and section shape paths", async () => {
@@ -110,7 +354,7 @@ describe("TixBitClient", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           success: true,
-          event_id: "provider-36PB9ZN",
+          event_id: "provider-EVENT123",
           venue_id: "2D2ZBN6G",
           venue_name: "State Farm Arena",
           configuration_id: "VGJBV",
@@ -153,16 +397,22 @@ describe("TixBitClient", () => {
         }),
       );
 
-    const client = new TixBitClient({ baseUrl: "https://tixbit.com" });
-    const result = await client.getSeatmap({ eventId: "provider-36PB9ZN" });
+    const client = new TixBitClient({ baseUrl: "https://www.tixbit.com" });
+    const result = await client.getSeatmap({ eventId: "provider-EVENT123" });
 
-    expect(result.event_id).toBe("36PB9ZN");
-    expect(result.background_image).toBe("https://tixbit.com/api/seatmap/assets?url=bg");
-    expect(result.coordinates_url).toBe("https://tixbit.com/api/seatmap/assets?url=coords");
+    expect(result.event_id).toBe("EVENT123");
+    expect(result.background_image).toBe("https://www.tixbit.com/api/seatmap/assets?url=bg");
+    expect(result.coordinates_url).toBe("https://www.tixbit.com/api/seatmap/assets?url=coords");
     expect(result.section_names).toContain("204");
     expect(result.zones[0]?.sections[0]?.shape_path).toBe("M127,244.8L200,300Z");
     expect(result.zones[0]?.sections[0]?.labels).toHaveLength(2);
     expect(result.zones[0]?.sections[0]?.x).toBe(134.5);
     expect(result.zones[0]?.sections[0]?.y).toBe(302.6);
+  });
+
+  it("reads the CLI version from package.json", () => {
+    const cliSource = readFileSync(new URL("../src/cli.ts", import.meta.url), "utf8");
+    expect(cliSource).toContain('.version(packageJson.version)');
+    expect(cliSource).not.toMatch(/\.version\(["']\d/);
   });
 });

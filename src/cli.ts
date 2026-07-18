@@ -8,10 +8,11 @@
 //   tixbit url <slug>
 //
 // Output: JSON (for piping to agents) or human-readable tables.
-// Set TIXBIT_BASE_URL to override the default (https://tixbit.com).
+// Set TIXBIT_BASE_URL to override the default (https://www.tixbit.com).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { TixBitClient } from "./client.js";
 import type {
   SearchEventsParams,
@@ -25,8 +26,10 @@ import type {
 
 const client = new TixBitClient({
   baseUrl: process.env.TIXBIT_BASE_URL,
-  apiKey: process.env.TIXBIT_API_KEY,
 });
+const packageJson = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 // ── Output helpers ──────────────────────────────────────────────────────────
 
@@ -98,8 +101,8 @@ function handleError(err: unknown): never {
 
 const program = new Command()
   .name("tixbit")
-  .description("Search events, browse listings, and buy tickets on TixBit")
-  .version("0.1.0");
+  .description("Search events, browse listings, and get TixBit checkout links")
+  .version(packageJson.version);
 
 // ── search ──────────────────────────────────────────────────────────────────
 
@@ -109,18 +112,51 @@ program
   .option("--city <city>", "Filter by city")
   .option("--state <state>", "Filter by state (2-letter code)")
   .option("--category <slug>", "Filter by category slug (e.g. nba-basketball)")
+  .option("--league <league>", "Filter by league abbreviation (e.g. NBA)")
+  .option("--event-type <type>", "SPORT, CONCERT, THEATER, or ALL")
+  .option("--performer-id <id>", "Filter by public performer ID")
+  .option("--venue-id <id>", "Filter by public venue ID")
+  .option("--parking <mode>", "Parking filter: exclude, only, or include")
+  .option("--near-lat <lat>", "Latitude for manual location filtering")
+  .option("--near-lng <lng>", "Longitude for manual location filtering")
+  .option("--location-mode <mode>", "Location mode: inferred, manual, or none")
   .option("--start-date <date>", "Events on or after this date (ISO)")
   .option("--end-date <date>", "Events on or before this date (ISO)")
   .option("--page <n>", "Page number", "1")
   .option("--size <n>", "Results per page", "10")
   .option("--json", "Output raw JSON (for agents)", false)
-  .action(async (query: string | undefined, opts: Record<string, string>) => {
+  .action(async (query: string | undefined, opts: {
+    city?: string;
+    state?: string;
+    category?: string;
+    league?: string;
+    eventType?: SearchEventsParams["categoryEventType"];
+    performerId?: string;
+    venueId?: string;
+    parking?: SearchEventsParams["parkingFilter"];
+    nearLat?: string;
+    nearLng?: string;
+    locationMode?: SearchEventsParams["locationMode"];
+    startDate?: string;
+    endDate?: string;
+    page: string;
+    size: string;
+    json: boolean;
+  }) => {
     try {
       const params: SearchEventsParams = {
         query,
         city: opts.city,
         state: opts.state,
         category: opts.category,
+        league: opts.league,
+        categoryEventType: opts.eventType,
+        performerId: opts.performerId,
+        venueId: opts.venueId,
+        parkingFilter: opts.parking,
+        nearLat: opts.nearLat ? parseFloat(opts.nearLat) : undefined,
+        nearLng: opts.nearLng ? parseFloat(opts.nearLng) : undefined,
+        locationMode: opts.locationMode,
         startDate: opts.startDate,
         endDate: opts.endDate,
         page: parseInt(opts.page, 10),
@@ -128,7 +164,7 @@ program
       };
 
       const result = await client.searchEvents(params);
-      const isJson = opts.json === true || opts.json === "true";
+      const isJson = opts.json;
 
       if (isJson) {
         output(result, true);
@@ -154,21 +190,56 @@ program
   .option("--lat <lat>", "Latitude")
   .option("--lng <lng>", "Longitude")
   .option("--category <type>", "SPORT, CONCERT, THEATER, or ALL", "ALL")
+  .option("--category-slug <slug>", "Filter by category slug")
+  .option("--query <query>", "Filter by search query")
+  .option("--league <league>", "Filter by league abbreviation")
+  .option("--date <date>", "Filter by event date (YYYY-MM-DD)")
+  .option("--page <n>", "Page number", "1")
+  .option("--context <context>", "homepage, events, or category", "homepage")
+  .option("--recommendation <kind>", "upcoming or trending", "upcoming")
+  .option("--parking <mode>", "Parking filter: exclude, only, or include")
+  .option("--location-mode <mode>", "Location mode: inferred, manual, or none")
   .option("--size <n>", "Number of results", "10")
   .option("--json", "Output raw JSON (for agents)", false)
-  .action(async (opts: Record<string, string>) => {
+  .action(async (opts: {
+    city?: string;
+    state?: string;
+    lat?: string;
+    lng?: string;
+    category: BrowseEventsParams["categoryEventType"];
+    categorySlug?: string;
+    query?: string;
+    league?: string;
+    date?: string;
+    page: string;
+    context: BrowseEventsParams["context"];
+    recommendation: BrowseEventsParams["recommendation"];
+    parking?: BrowseEventsParams["parkingFilter"];
+    locationMode?: BrowseEventsParams["locationMode"];
+    size: string;
+    json: boolean;
+  }) => {
     try {
       const params: BrowseEventsParams = {
         city: opts.city,
         state: opts.state,
         latitude: opts.lat ? parseFloat(opts.lat) : undefined,
         longitude: opts.lng ? parseFloat(opts.lng) : undefined,
-        categoryEventType: (opts.category as BrowseEventsParams["categoryEventType"]) ?? "ALL",
+        categoryEventType: opts.category ?? "ALL",
+        category: opts.categorySlug,
+        query: opts.query,
+        league: opts.league,
+        date: opts.date,
+        page: parseInt(opts.page, 10),
+        context: opts.context,
+        recommendation: opts.recommendation,
+        parkingFilter: opts.parking,
+        locationMode: opts.locationMode,
         size: parseInt(opts.size, 10),
       };
 
       const result = await client.browse(params);
-      const isJson = opts.json === true || opts.json === "true";
+      const isJson = opts.json;
 
       if (isJson) {
         output(result, true);
@@ -191,18 +262,29 @@ program
   .option("--size <n>", "Results per page", "20")
   .option("--page <n>", "Page number", "1")
   .option("--sort <dir>", "Price sort: asc or desc", "asc")
+  .option("--all", "Return all available listings", false)
+  .option("--refresh", "Bypass the listings cache", false)
   .option("--json", "Output raw JSON (for agents)", false)
-  .action(async (eventId: string, opts: Record<string, string>) => {
+  .action(async (eventId: string, opts: {
+    size: string;
+    page: string;
+    sort: "asc" | "desc";
+    all: boolean;
+    refresh: boolean;
+    json: boolean;
+  }) => {
     try {
       const params: GetListingsParams = {
         eventId,
         size: parseInt(opts.size, 10),
         page: parseInt(opts.page, 10),
-        orderByDirection: opts.sort as "asc" | "desc",
+        orderByDirection: opts.sort,
+        includeAll: opts.all,
+        refresh: opts.refresh,
       };
 
       const result = await client.getListings(params);
-      const isJson = opts.json === true || opts.json === "true";
+      const isJson = opts.json;
 
       if (isJson) {
         output(result, true);
@@ -226,22 +308,18 @@ program
   .option("--json", "Output raw JSON", false)
   .action(async (listingId: string, opts: { quantity: string; json?: boolean }) => {
     try {
-      const quantity = parseInt(opts.quantity, 10);
-      if (!Number.isFinite(quantity) || quantity < 1) {
-        process.stderr.write("Error: --quantity must be a positive integer\n");
+      const quantity = Number(opts.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 8) {
+        process.stderr.write("Error: --quantity must be an integer from 1 to 8\n");
         process.exit(1);
       }
 
-      const isJson = opts.json === true || (opts.json as unknown) === "true";
+      const isJson = opts.json === true;
 
       // Fetch listing details to show context
       let listingInfo: TixBitListing | undefined;
       try {
-        const result = await client.getListings({ eventId: listingId, size: 1 });
-        // If the user passed a listing ID (not event ID), search by listing
-        if (result.listings.length > 0) {
-          listingInfo = result.listings.find((l) => l.id === listingId);
-        }
+        listingInfo = (await client.getListing(listingId)).listing;
       } catch {
         // Listing fetch failed — not critical, we can still generate the link
       }
@@ -284,10 +362,10 @@ program
   .description("Show the seating chart / section map for an event's venue")
   .option("--section <name>", "Highlight a specific section (case-insensitive)")
   .option("--json", "Output raw JSON (for agents)", false)
-  .action(async (eventId: string, opts: Record<string, string>) => {
+  .action(async (eventId: string, opts: { section?: string; json: boolean }) => {
     try {
       const result = await client.getSeatmap({ eventId });
-      const isJson = opts.json === true || (opts.json as unknown) === "true";
+      const isJson = opts.json;
 
       if (isJson) {
         output(result, true);

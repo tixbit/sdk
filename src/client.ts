@@ -2,7 +2,7 @@
 // @tixbit/sdk — Client
 //
 // Standalone HTTP client for the TixBit public API. Zero internal dependencies.
-// Works from any Node.js 20+ environment, CLI, or agent runtime.
+// Works from the Node.js versions declared in package.json.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type {
@@ -10,8 +10,10 @@ import type {
   SearchEventsParams,
   SearchEventsResult,
   TixBitEvent,
+  TixBitEventDetail,
   GetListingsParams,
   GetListingsResult,
+  GetListingResult,
   TixBitListing,
   BrowseEventsParams,
   BrowseEventsResult,
@@ -23,7 +25,7 @@ import type {
   CheckoutLink,
 } from "./types.js";
 
-const DEFAULT_BASE_URL = "https://tixbit.com";
+const DEFAULT_BASE_URL = "https://www.tixbit.com";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const USER_AGENT = "@tixbit/sdk";
 
@@ -54,17 +56,15 @@ function toAbsoluteUrl(baseUrl: string, value: string | null | undefined): strin
 export class TixBitClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
-  private readonly apiKey: string | undefined;
 
   constructor(config: TixBitConfig = {}) {
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.apiKey = config.apiKey;
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -72,13 +72,11 @@ export class TixBitClient {
     const headers: Record<string, string> = {
       Accept: "application/json",
       "User-Agent": USER_AGENT,
-      ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
     };
 
     try {
       const res = await fetch(url, {
-        ...init,
-        headers: { ...headers, ...(init?.headers as Record<string, string>) },
+        headers,
         signal: controller.signal,
       });
 
@@ -92,6 +90,11 @@ export class TixBitClient {
       }
 
       return (await res.json()) as T;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new TixBitTimeoutError(url, this.timeoutMs);
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -120,6 +123,14 @@ export class TixBitClient {
       city: params.city,
       state: params.state,
       category: params.category,
+      league: params.league,
+      categoryEventType: params.categoryEventType,
+      performerId: params.performerId,
+      venueId: params.venueId,
+      parkingFilter: params.parkingFilter,
+      nearLat: params.nearLat,
+      nearLng: params.nearLng,
+      locationMode: params.locationMode,
       startDate: params.startDate,
       endDate: params.endDate,
       page: params.page,
@@ -131,9 +142,29 @@ export class TixBitClient {
       pagination: SearchEventsResult["pagination"];
     }>(`/api/events/search${query}`);
 
+    const pagination = data.pagination;
+
     return {
       events: (data.events ?? []).map(normalizeEvent),
-      pagination: data.pagination,
+      pagination: {
+        ...pagination,
+        totalExact: pagination.totalExact ?? pagination.total !== null,
+      },
+    };
+  }
+
+  /** Get one public event by ID or slug. */
+  async getEvent(eventId: string): Promise<TixBitEventDetail> {
+    const normalizedEventId = normalizeExternalEventId(eventId);
+    const data = await this.request<TixBitEventDetail>(
+      `/api/events/${encodeURIComponent(normalizedEventId)}`,
+    );
+    const publicEventId = normalizeExternalEventId(data.external_id ?? data.id);
+
+    return {
+      ...data,
+      id: publicEventId,
+      external_id: publicEventId,
     };
   }
 
@@ -149,24 +180,42 @@ export class TixBitClient {
    */
   async browse(params: BrowseEventsParams = {}): Promise<BrowseEventsResult> {
     const query = this.qs({
+      page: params.page ?? 1,
       size: params.size ?? 18,
-      context: "homepage",
-      recommendation: "upcoming",
+      query: params.query,
+      category: params.category,
+      league: params.league,
+      date: params.date,
+      context: params.context ?? "homepage",
+      recommendation: params.recommendation ?? "upcoming",
       nearLat: params.latitude,
       nearLng: params.longitude,
       preferCity: params.city,
       preferState: params.state,
       categoryEventType: params.categoryEventType,
+      locationMode: params.locationMode,
+      searchScope: params.searchScope,
+      parkingFilter: params.parkingFilter,
     });
 
     const data = await this.request<{
       events: unknown[];
-      total: number;
+      total: number | null;
+      totalExact?: boolean;
+      hasMore?: boolean;
+      page?: number;
+      pageSize?: number;
+      degraded?: boolean;
     }>(`/api/events${query}`);
 
     return {
       events: (data.events ?? []).map(normalizeEvent),
       total: data.total,
+      totalExact: data.totalExact ?? data.total !== null,
+      hasMore: data.hasMore ?? false,
+      page: data.page ?? params.page ?? 1,
+      pageSize: data.pageSize ?? params.size ?? 18,
+      ...(data.degraded === undefined ? {} : { degraded: data.degraded }),
     };
   }
 
@@ -177,7 +226,7 @@ export class TixBitClient {
    *
    * @example
    * ```ts
-   * const listings = await client.getListings({ eventId: "abc123" });
+   * const listings = await client.getListings({ eventId: "EVENT123" });
    * ```
    */
   async getListings(params: GetListingsParams): Promise<GetListingsResult> {
@@ -185,6 +234,8 @@ export class TixBitClient {
       size: params.size ?? 50,
       page: params.page ?? 1,
       order_by_direction: params.orderByDirection ?? "asc",
+      includeAll: params.includeAll,
+      refresh: params.refresh,
     });
 
     const normalizedEventId = normalizeExternalEventId(params.eventId);
@@ -203,8 +254,29 @@ export class TixBitClient {
         total: readListingMetaNumber(data.meta, "total_count", "total") ?? listings.length,
         page: readListingMetaNumber(data.meta, "current_page_number", "page") ?? params.page ?? 1,
         size: readListingMetaNumber(data.meta, "current_page_size", "size") ?? params.size ?? 50,
+        totalPages: readListingMetaNumber(data.meta, "total_pages") ?? undefined,
+        currentPageTotalCount:
+          readListingMetaNumber(data.meta, "current_page_total_count") ?? undefined,
+        cache: readBoolean(data.meta?.cache) ?? undefined,
+        cacheExpiresAt: readNullableString(data.meta?.cache_expires_at),
+        cacheState: readEnum(data.meta?.cache_state, ["fresh", "stale", "unavailable"]),
+        freshness: readEnum(data.meta?.freshness, ["live", "cached"]),
         cacheSource: data.meta?.cacheSource as string | undefined,
       },
+    };
+  }
+
+  /** Get one public listing by listing ID. */
+  async getListing(listingId: string): Promise<GetListingResult> {
+    const data = await this.request<{
+      success: boolean;
+      listing: unknown;
+      disclosures?: GetListingResult["disclosures"];
+    }>(`/api/listings/${encodeURIComponent(listingId)}`);
+
+    return {
+      listing: normalizeListing(data.listing),
+      disclosures: data.disclosures ?? [],
     };
   }
 
@@ -219,29 +291,37 @@ export class TixBitClient {
    * @example
    * ```ts
    * const link = client.createCheckoutLink({
-   *   listingId: "P2JO5OBX",
+   *   listingId: "LISTING123",
    *   quantity: 2,
    * });
    *
    * console.log(link.url);
-   * // → "https://tixbit.com/checkout/process?listing=P2JO5OBX&quantity=2"
+   * // → "https://www.tixbit.com/checkout/process?listing=LISTING123&quantity=2"
    * ```
    */
   createCheckoutLink(params: CheckoutParams): CheckoutLink {
-    const quantity = Math.max(1, Math.min(8, Math.round(params.quantity)));
-    const url = `${this.baseUrl}/checkout/process?listing=${encodeURIComponent(params.listingId)}&quantity=${quantity}`;
+    const listingId = params.listingId.trim();
+    if (!/^[A-Za-z0-9_-]{2,50}$/.test(listingId)) {
+      throw new TypeError(
+        "listingId must be 2-50 letters, numbers, hyphens, or underscores",
+      );
+    }
+    if (!Number.isInteger(params.quantity) || params.quantity < 1 || params.quantity > 8) {
+      throw new RangeError("quantity must be an integer from 1 to 8");
+    }
+    const url = `${this.baseUrl}/checkout/process?listing=${encodeURIComponent(listingId)}&quantity=${params.quantity}`;
 
     return {
       url,
-      listingId: params.listingId,
-      quantity,
+      listingId,
+      quantity: params.quantity,
     };
   }
 
   // ── Event URL helper ──────────────────────────────────────────────────────
 
   /**
-   * Build the direct URL to an event page on tixbit.com.
+   * Build the direct URL to an event page on www.tixbit.com.
    */
   eventUrl(slugOrId: string): string {
     if (slugOrId.includes("/")) {
@@ -263,7 +343,7 @@ export class TixBitClient {
    *
    * @example
    * ```ts
-   * const seatmap = await client.getSeatmap({ eventId: "4BKJMDZ" });
+   * const seatmap = await client.getSeatmap({ eventId: "EVENT123" });
    * console.log(seatmap.venue_name); // "State Farm Arena"
    * console.log(seatmap.section_names); // ["101", "102", ...]
    * ```
@@ -437,9 +517,15 @@ function normalizeEvent(raw: unknown): TixBitEvent {
     venue_name: str(e.venue_name) ?? str(e.venueName) ?? null,
     venue_city: str(e.venue_city) ?? str(e.venueCity) ?? null,
     venue_state: str(e.venue_state) ?? str(e.venueState) ?? null,
+    venue_country: str(e.venue_country) ?? str(e.venueCountry) ?? null,
     image_url: str(e.image_url) ?? str(e.imageUrl) ?? null,
+    category_slug: str(e.category_slug) ?? str(e.categorySlug) ?? null,
     category_name: str(e.category_name) ?? str(e.categoryName) ?? null,
     category_event_type: str(e.category_event_type) ?? str(e.categoryEventType) ?? null,
+    metadata:
+      e.metadata && typeof e.metadata === "object"
+        ? (e.metadata as Record<string, unknown>)
+        : null,
     has_listings: Boolean(e.has_listings),
     inventory: normalizeInventory(e.inventory),
   };
@@ -450,10 +536,19 @@ function normalizeInventory(raw: unknown): TixBitEvent["inventory"] {
     return { total_available: 0, min_price: 0, max_price: 0 };
   }
   const inv = raw as Record<string, unknown>;
+  const sources = inv.sources as Record<string, unknown> | undefined;
   return {
     total_available: num(inv.total_available) ?? 0,
     min_price: num(inv.min_price) ?? 0,
     max_price: num(inv.max_price) ?? 0,
+    ...(sources
+      ? {
+          sources: {
+            local: num(sources.local) ?? 0,
+            marketplace: num(sources.marketplace) ?? 0,
+          },
+        }
+      : {}),
   };
 }
 
@@ -463,18 +558,34 @@ function normalizeListing(raw: unknown): TixBitListing {
   const attrs = (outer.attributes ?? outer) as Record<string, unknown>;
   return {
     id: str(outer.id) ?? str(attrs.id) ?? "",
+    event_id: str(attrs.event_id) ?? null,
     // price_per_ticket is the fee-inclusive per-ticket price (in dollars, not cents)
     price: num(attrs.price_per_ticket) ?? num(attrs.price) ?? 0,
+    total_price: num(attrs.total_price),
+    base_price_per_ticket: num(attrs.base_price_per_ticket),
+    base_total_price: num(attrs.base_total_price),
+    face_value: num(attrs.face_value),
+    fee_amount_per_ticket: num(attrs.fee_amount_per_ticket),
+    fee_amount_total: num(attrs.fee_amount_total),
+    fee_percent: num(attrs.fee_percent),
+    currency: str(attrs.currency) ?? "USD",
     quantity: num(attrs.quantity) ?? num(attrs.available_quantity) ?? 0,
     quantities_list: Array.isArray(attrs.quantities_list)
       ? (attrs.quantities_list as number[])
       : [],
     section: str(attrs.section) ?? null,
     row: str(attrs.row) ?? null,
+    seat_from: str(attrs.seat_from) ?? null,
+    seat_to: str(attrs.seat_to) ?? null,
     seat_numbers: str(attrs.seat_numbers) ?? null,
     listing_hash: str(attrs.listing_hash) ?? "",
     notes: str(attrs.notes) ?? null,
     delivery_method: str(attrs.delivery_method) ?? str(attrs.delivery_type) ?? null,
+    in_hand_date: str(attrs.in_hand_date) ?? null,
+    stock_type: str(attrs.stock_type) ?? null,
+    disclosure_ids: Array.isArray(attrs.disclosure_ids)
+      ? attrs.disclosure_ids.filter((id): id is string => typeof id === "string")
+      : [],
     splits: Array.isArray(attrs.splits) ? (attrs.splits as number[]) : [],
     raw: outer as Record<string, unknown>,
   };
@@ -500,6 +611,23 @@ function str(v: unknown): string | null {
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function readBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function readNullableString(value: unknown): string | null | undefined {
+  return value === null ? null : typeof value === "string" ? value : undefined;
+}
+
+function readEnum<const T extends string>(
+  value: unknown,
+  choices: readonly T[],
+): T | undefined {
+  return typeof value === "string" && choices.includes(value as T)
+    ? (value as T)
+    : undefined;
 }
 
 function readListingMetaNumber(
@@ -528,5 +656,15 @@ export class TixBitApiError extends Error {
   ) {
     super(message);
     this.name = "TixBitApiError";
+  }
+}
+
+export class TixBitTimeoutError extends Error {
+  constructor(
+    public readonly url: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(`Request timed out after ${timeoutMs}ms: ${url}`);
+    this.name = "TixBitTimeoutError";
   }
 }

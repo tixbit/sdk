@@ -7,7 +7,7 @@ Thanks for your interest in contributing! Here's how to get started.
 ```sh
 git clone https://github.com/tixbit/sdk.git
 cd sdk
-npm install
+npm ci
 npm run build
 ```
 
@@ -44,7 +44,8 @@ src/
 
 - **TypeScript strict mode** — no `any`, no `@ts-ignore`
 - **Zero runtime dependencies** beyond `commander` (for the CLI)
-- **Node 20+** — use native `fetch`, no polyfills
+- **Node `^20.19.0 || >=22.12.0`** — use native `fetch`, no polyfills
+- **CI matrix** — Node 20.19, 22, 24, and 26; Node 20 is compatibility-only because it is end-of-life
 - **Both outputs matter** — human-readable for terminals, `--json` for agents/piping
 - Run `npm run typecheck` before submitting a PR
 

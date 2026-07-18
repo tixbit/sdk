@@ -1,7 +1,7 @@
 {
   "name": "tixbit",
-  "version": "0.1.0",
-  "description": "Search events, view seatmaps, browse listings, and buy tickets on TixBit",
+  "version": "0.1.2",
+  "description": "Search events, browse listings, view seatmaps, and get TixBit checkout links",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -32,12 +32,13 @@
     "commander": "^13.1.0"
   },
   "devDependencies": {
+    "@types/node": "20.19.25",
     "tsup": "^8.4.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.1.0"
+    "vitest": "3.2.7"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "keywords": [
     "tixbit",
@@ -53,7 +54,7 @@
     "mlb",
     "nfl"
   ],
-  "homepage": "https://tixbit.com",
+  "homepage": "https://www.tixbit.com",
   "license": "MIT",
   "repository": {
     "type": "git",
