@@ -23,11 +23,46 @@ import type {
   SeatmapSection,
   CheckoutParams,
   CheckoutLink,
+  PurchaseTicketsParams,
+  PurchaseOrder,
+  PurchaseTicketsResult,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://www.tixbit.com";
+const DEFAULT_PAYMENT_ENDPOINT = "https://mcp.tixbit.com/api/purchase";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const USER_AGENT = "@tixbit/sdk";
+
+function normalizePaymentEndpoint(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new TypeError("paymentEndpoint must be an absolute URL");
+  }
+
+  const isLoopback =
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "[::1]";
+  const isTixBitHost =
+    url.hostname === "tixbit.com" || url.hostname.endsWith(".tixbit.com");
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) {
+    throw new TypeError(
+      "paymentEndpoint must use HTTPS (HTTP is allowed only for loopback QA)",
+    );
+  }
+  if (url.username || url.password || url.hash) {
+    throw new TypeError("paymentEndpoint must not contain credentials or a fragment");
+  }
+  if (!isLoopback && !isTixBitHost) {
+    throw new TypeError(
+      "paymentEndpoint must use a TixBit host or a loopback address for local QA",
+    );
+  }
+
+  return url.toString().replace(/\/$/, "");
+}
 
 function normalizeExternalEventId(eventId: string): string {
   if (!eventId) return eventId;
@@ -56,10 +91,16 @@ function toAbsoluteUrl(baseUrl: string, value: string | null | undefined): strin
 export class TixBitClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
+  private readonly paymentEndpoint: string;
+  private readonly paymentFetch: typeof fetch;
 
   constructor(config: TixBitConfig = {}) {
     this.baseUrl = (config.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.paymentEndpoint = normalizePaymentEndpoint(
+      config.paymentEndpoint ?? DEFAULT_PAYMENT_ENDPOINT,
+    );
+    this.paymentFetch = config.paymentFetch ?? ((input, init) => fetch(input, init));
   }
 
   // ── HTTP helpers ──────────────────────────────────────────────────────────
@@ -318,6 +359,133 @@ export class TixBitClient {
     };
   }
 
+  // ── Machine checkout ─────────────────────────────────────────────────────
+
+  /**
+   * Purchase tickets through the public MPP endpoint.
+   *
+   * Configure `paymentFetch` with the official mppx client to automatically
+   * answer the server's 402 challenge. Reuse the returned idempotency key for
+   * any recovery check after a timeout or pending result.
+   */
+  async purchaseTickets(params: PurchaseTicketsParams): Promise<PurchaseTicketsResult> {
+    const { listingId, quantity, email, idempotencyKey, name } =
+      normalizePurchaseTicketsParams(params);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    try {
+      const response = await this.paymentFetch(this.paymentEndpoint, {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+        },
+        body: JSON.stringify({
+          listingId,
+          quantity,
+          email,
+          idempotencyKey,
+          ...(name ? { name } : {}),
+        }),
+        signal: controller.signal,
+      });
+      const body = (await response.json().catch(() => ({}))) as Partial<
+        PurchaseTicketsResult
+      >;
+      const orderReference = normalizeOrderReference(body.orderReference);
+      const receiptUrl = normalizeReceiptUrl(body.receiptUrl);
+
+      if (response.status === 402) {
+        const order = normalizePurchaseOrder(
+          body.order,
+          orderReference,
+          "payment_required",
+        );
+        return {
+          success: false,
+          status: "payment_required",
+          idempotencyKey,
+          orderReference,
+          receiptUrl,
+          ...(order ? { order } : {}),
+          action:
+            "Configure the official mppx payment client, then retry with the same idempotency key.",
+        };
+      }
+
+      if (isPurchaseStatus(body.status)) {
+        if (
+          body.status === "fulfilled" &&
+          response.ok &&
+          body.success === true &&
+          !orderReference
+        ) {
+          return {
+            success: false,
+            status: "pending",
+            idempotencyKey,
+            orderReference: null,
+            receiptUrl,
+            error: {
+              code: "PURCHASE_OUTCOME_AMBIGUOUS",
+              message: "The purchase response did not include an order reference.",
+            },
+            action:
+              "Retry with the same idempotency key. Do not create a new payment or purchase attempt.",
+          };
+        }
+        if (body.status === "fulfilled" && (!response.ok || body.success !== true)) {
+          return rejectedPurchaseResult(
+            idempotencyKey,
+            orderReference,
+            receiptUrl,
+            response.status,
+          );
+        }
+        const order = normalizePurchaseOrder(body.order, orderReference, body.status);
+        return {
+          success: body.status === "fulfilled",
+          status: body.status,
+          idempotencyKey,
+          orderReference,
+          receiptUrl,
+          ...(order ? { order } : {}),
+          ...(body.status === "manual_review_required" ? { paid: true } : {}),
+          ...safePurchaseOutcomeDetails(body.status),
+        };
+      }
+
+      return rejectedPurchaseResult(
+        idempotencyKey,
+        orderReference,
+        receiptUrl,
+        response.status,
+      );
+    } catch {
+      return {
+        success: false,
+        status: "pending",
+        idempotencyKey,
+        orderReference: null,
+        receiptUrl: null,
+        error: {
+          code: controller.signal.aborted ? "PURCHASE_TIMEOUT" : "PURCHASE_NETWORK_ERROR",
+          message: controller.signal.aborted
+            ? `Purchase status is unknown after ${this.timeoutMs}ms.`
+            : "Purchase status is unknown because the request did not complete.",
+        },
+        action:
+          "Retry with the same idempotency key. Do not create a new payment or purchase attempt.",
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // ── Event URL helper ──────────────────────────────────────────────────────
 
   /**
@@ -497,6 +665,199 @@ export class TixBitClient {
 // ─────────────────────────────────────────────────────────────────────────────
 // Normalizers
 // ─────────────────────────────────────────────────────────────────────────────
+
+export function normalizeBuyerEmail(value: string): string {
+  const email = value.trim().toLowerCase();
+  const match = email.match(/^([^\s@]{1,64})@([^\s@]{1,253})$/);
+  if (
+    !match ||
+    email.length > 254 ||
+    match[1]!.startsWith(".") ||
+    match[1]!.endsWith(".") ||
+    match[1]!.includes("..") ||
+    !match[2]!.includes(".") ||
+    match[2]!.split(".").some((label) =>
+      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label),
+    )
+  ) {
+    throw new TypeError("email must be a valid email address");
+  }
+  return email;
+}
+
+export function normalizePurchaseTicketsParams(
+  params: PurchaseTicketsParams,
+): Required<Pick<PurchaseTicketsParams, "listingId" | "quantity" | "email">> &
+  Pick<PurchaseTicketsParams, "name"> & { idempotencyKey: string } {
+  const listingId = params.listingId.trim();
+  if (!/^[A-Za-z0-9_-]{2,100}$/.test(listingId)) {
+    throw new TypeError(
+      "listingId must be 2-100 letters, numbers, hyphens, or underscores",
+    );
+  }
+  if (!Number.isInteger(params.quantity) || params.quantity < 1 || params.quantity > 8) {
+    throw new RangeError("quantity must be an integer from 1 to 8");
+  }
+
+  const email = normalizeBuyerEmail(params.email);
+  const idempotencyKey = params.idempotencyKey?.trim() || crypto.randomUUID();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      idempotencyKey,
+    )
+  ) {
+    throw new TypeError("idempotencyKey must be an unguessable UUID v4");
+  }
+  const name = params.name?.trim();
+  if (name && name.length > 120) {
+    throw new TypeError("name must be at most 120 characters");
+  }
+
+  return { listingId, quantity: params.quantity, email, idempotencyKey, name };
+}
+
+function normalizePurchaseOrder(
+  value: unknown,
+  orderReference: string | null,
+  status: PurchaseTicketsResult["status"],
+): PurchaseOrder | undefined {
+  if (!value || typeof value !== "object" || !orderReference) return undefined;
+  const order = value as Record<string, unknown>;
+  if (
+    order.reference !== orderReference ||
+    order.status !== status ||
+    typeof order.listingId !== "string" ||
+    !/^[A-Za-z0-9_-]{2,100}$/.test(order.listingId) ||
+    !Number.isInteger(order.quantity) ||
+    (order.quantity as number) < 1 ||
+    (order.quantity as number) > 8 ||
+    !isNonNegativeNumber(order.pricePerTicket) ||
+    !isNonNegativeNumber(order.subtotal) ||
+    !isNonNegativeNumber(order.fees) ||
+    !isNonNegativeNumber(order.total) ||
+    typeof order.currency !== "string" ||
+    !/^[A-Z]{3}$/.test(order.currency)
+  ) {
+    return undefined;
+  }
+
+  return {
+    reference: orderReference,
+    status,
+    listingId: order.listingId,
+    quantity: order.quantity as number,
+    pricePerTicket: order.pricePerTicket,
+    subtotal: order.subtotal,
+    fees: order.fees,
+    total: order.total,
+    currency: order.currency,
+    ...(typeof order.section === "string" && order.section.length <= 120
+      ? { section: order.section }
+      : {}),
+    ...(typeof order.row === "string" && order.row.length <= 120
+      ? { row: order.row }
+      : {}),
+  };
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function normalizeOrderReference(value: unknown): string | null {
+  return typeof value === "string" &&
+    /^TBM-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{10}$/.test(value)
+    ? value
+    : null;
+}
+
+function normalizeReceiptUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function safePurchaseOutcomeDetails(
+  status: PurchaseTicketsResult["status"],
+): Pick<PurchaseTicketsResult, "action" | "error"> {
+  switch (status) {
+    case "pending":
+      return {
+        error: {
+          code: "PURCHASE_PENDING",
+          message: "Purchase status is still pending.",
+        },
+        action:
+          "Retry with the same idempotency key. Do not create a new payment or purchase attempt.",
+      };
+    case "manual_review_required":
+      return {
+        error: {
+          code: "FULFILLMENT_REVIEW_REQUIRED",
+          message: "Payment was received, but fulfillment requires manual review.",
+        },
+        action:
+          "Do not submit another payment or purchase. Contact TixBit support with the order reference.",
+      };
+    case "payment_failed":
+      return {
+        error: {
+          code: "PAYMENT_VERIFICATION_FAILED",
+          message: "Payment verification failed.",
+        },
+        action: "Obtain a new MPP credential for the same idempotency key.",
+      };
+    case "rejected":
+      return {
+        error: {
+          code: "PURCHASE_REJECTED",
+          message: "The purchase request was rejected.",
+        },
+        action: "Correct the request and retry with the same idempotency key.",
+      };
+    default:
+      return {};
+  }
+}
+
+function rejectedPurchaseResult(
+  idempotencyKey: string,
+  orderReference: string | null,
+  receiptUrl: string | null,
+  httpStatus: number,
+): PurchaseTicketsResult {
+  return {
+    success: false,
+    status: "rejected",
+    idempotencyKey,
+    orderReference,
+    receiptUrl,
+    error: {
+      code: `HTTP_${httpStatus}`,
+      message: "Purchase request was rejected or returned an invalid response.",
+    },
+    action: "Review the request and retry with the same idempotency key if appropriate.",
+  };
+}
+
+function isPurchaseStatus(
+  value: unknown,
+): value is PurchaseTicketsResult["status"] {
+  return (
+    value === "fulfilled" ||
+    value === "payment_required" ||
+    value === "pending" ||
+    value === "manual_review_required" ||
+    value === "payment_failed" ||
+    value === "rejected"
+  );
+}
 
 function normalizeEvent(raw: unknown): TixBitEvent {
   const e = raw as Record<string, unknown>;

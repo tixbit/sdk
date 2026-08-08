@@ -328,6 +328,286 @@ describe("TixBitClient", () => {
     ).toThrow(RangeError);
   });
 
+  it("returns a redacted MPP requirement with a normalized email and stable idempotency key", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          status: "payment_required",
+          idempotencyKey: "11111111-1111-4111-8111-111111111111",
+          orderReference: "TBM-A23456789B",
+          receiptUrl: null,
+          order: {
+            reference: "TBM-A23456789B",
+            status: "payment_required",
+            listingId: "LISTING123",
+            quantity: 2,
+            pricePerTicket: 125,
+            subtotal: 250,
+            fees: 25,
+            total: 275,
+            currency: "USD",
+          },
+        }),
+        {
+          status: 402,
+          headers: { "www-authenticate": 'Payment id="challenge-1"' },
+        },
+      ),
+    );
+    const client = new TixBitClient();
+
+    const result = await client.purchaseTickets({
+      listingId: "LISTING123",
+      quantity: 2,
+      email: "  FAN@Example.com ",
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      status: "payment_required",
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+      orderReference: "TBM-A23456789B",
+      order: { total: 275, fees: 25 },
+    });
+    expect(result).not.toHaveProperty("challenge");
+    const [, init] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
+    expect(init?.redirect).toBe("error");
+    expect(init?.headers).not.toHaveProperty("X-TixBit-Api-Key");
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      listingId: "LISTING123",
+      quantity: 2,
+      email: "fan@example.com",
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+    });
+  });
+
+  it("returns a fulfilled agent-readable result from an MPP-enabled fetch", async () => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        success: true,
+        status: "fulfilled",
+        idempotencyKey: "22222222-2222-4222-8222-222222222222",
+        orderReference: "TBM-C23456789D",
+        receiptUrl: "https://receipts.example/receipt-2",
+        order: {
+          reference: "TBM-C23456789D",
+          status: "fulfilled",
+          listingId: "LISTING123",
+          quantity: 1,
+          pricePerTicket: 125,
+          subtotal: 125,
+          fees: 12.5,
+          total: 137.5,
+          currency: "USD",
+        },
+      }),
+    );
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "fan@example.com",
+        idempotencyKey: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).resolves.toMatchObject({
+      success: true,
+      status: "fulfilled",
+      orderReference: "TBM-C23456789D",
+      receiptUrl: "https://receipts.example/receipt-2",
+    });
+    expect(paymentFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects unsafe payment endpoints before sending a request", () => {
+    expect(
+      () =>
+        new TixBitClient({
+          paymentEndpoint: "http://attacker.example/purchase",
+        }),
+    ).toThrow("paymentEndpoint must use HTTPS");
+    expect(
+      () =>
+        new TixBitClient({
+          paymentEndpoint: "https://user:secret@example.com/purchase",
+        }),
+    ).toThrow("must not contain credentials");
+    expect(
+      () =>
+        new TixBitClient({
+          paymentEndpoint: "https://attacker.example/purchase",
+        }),
+    ).toThrow("must use a TixBit host");
+    expect(
+      () =>
+        new TixBitClient({
+          paymentEndpoint: "http://127.0.0.1:3002/api/purchase",
+        }),
+    ).not.toThrow();
+  });
+
+  it("redacts unknown response fields and rejects failed fulfilled responses", async () => {
+    const paymentFetch = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            success: true,
+            status: "fulfilled",
+            orderReference: "TBM-E23456789F",
+            providerPurchaseId: "provider-secret",
+            internalDebug: { orderToken: "one-shot-secret" },
+          },
+          500,
+        ),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          success: true,
+          status: "fulfilled",
+          orderReference: "TBM-G23456789H",
+          receiptUrl: "https://receipts.example/receipt-4",
+          providerPurchaseId: "provider-secret",
+          internalDebug: { orderToken: "one-shot-secret" },
+        }),
+      );
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    const failed = await client.purchaseTickets({
+      listingId: "LISTING123",
+      quantity: 1,
+      email: "fan@example.com",
+      idempotencyKey: "44444444-4444-4444-8444-444444444444",
+    });
+    expect(failed).toMatchObject({ success: false, status: "rejected" });
+    expect(failed).not.toHaveProperty("providerPurchaseId");
+    expect(failed).not.toHaveProperty("internalDebug");
+
+    const fulfilled = await client.purchaseTickets({
+      listingId: "LISTING123",
+      quantity: 1,
+      email: "fan@example.com",
+      idempotencyKey: "55555555-5555-4555-8555-555555555555",
+    });
+    expect(fulfilled).toMatchObject({
+      success: true,
+      status: "fulfilled",
+      orderReference: "TBM-G23456789H",
+    });
+    expect(fulfilled).not.toHaveProperty("providerPurchaseId");
+    expect(fulfilled).not.toHaveProperty("internalDebug");
+  });
+
+  it("keeps fulfilled responses without an order reference pending", async () => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ success: true, status: "fulfilled" }),
+    );
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "fan@example.com",
+        idempotencyKey: "66666666-6666-4666-8666-666666666666",
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      status: "pending",
+      idempotencyKey: "66666666-6666-4666-8666-666666666666",
+      orderReference: null,
+      error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
+      action: expect.stringContaining("Do not create a new payment"),
+    });
+  });
+
+  it("keeps fulfilled responses with a provider-shaped reference pending", async () => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({
+        success: true,
+        status: "fulfilled",
+        orderReference: "provider-purchase-123",
+      }),
+    );
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "fan@example.com",
+        idempotencyKey: "77777777-7777-4777-8777-777777777777",
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      status: "pending",
+      orderReference: null,
+      error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
+    });
+  });
+
+  it("returns pending on a timeout or network ambiguity and preserves the retry key", async () => {
+    const paymentFetch = vi.fn<typeof fetch>().mockRejectedValue(new Error("timeout"));
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "fan@example.com",
+        idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      status: "pending",
+      idempotencyKey: "33333333-3333-4333-8333-333333333333",
+      error: { code: "PURCHASE_NETWORK_ERROR" },
+    });
+  });
+
+  it("rejects missing or invalid email before issuing a payment request", async () => {
+    const paymentFetch = vi.fn<typeof fetch>();
+    const client = new TixBitClient({
+      paymentFetch,
+    });
+
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "not-an-email",
+      }),
+    ).rejects.toThrow("email must be a valid email address");
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "",
+      }),
+    ).rejects.toThrow("email must be a valid email address");
+    await expect(
+      client.purchaseTickets({
+        listingId: "LISTING123",
+        quantity: 1,
+        email: "fan@example.com",
+        idempotencyKey: "order-attempt-123",
+      }),
+    ).rejects.toThrow("idempotencyKey must be an unguessable UUID v4");
+    expect(paymentFetch).not.toHaveBeenCalled();
+  });
+
   it("returns typed HTTP and timeout errors", async () => {
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce(jsonResponse({ error: "Unavailable" }, 503))

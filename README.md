@@ -1,8 +1,8 @@
 # tixbit
 
-Search events, view seatmaps, browse listings, and get browser checkout links on [TixBit](https://www.tixbit.com) — from the terminal, your code, or an AI agent.
+Search events, view seatmaps, browse listings, get browser checkout links, and purchase through MPP on [TixBit](https://www.tixbit.com) — from the terminal, your code, or an AI agent.
 
-No API key required.
+Discovery, browser checkout links, and machine purchases require no TixBit API key. Machine purchases require an MPP account and an explicit buyer email.
 
 ## Install
 
@@ -48,9 +48,19 @@ tixbit listings <event-id> --size 5 --sort asc
 ```sh
 # Get a checkout link for a listing
 tixbit checkout <listing-id> --quantity 2
+
+# Or pay from an agent/terminal with MPP
+npx mppx account create
+tixbit purchase <listing-id> \
+  --quantity 2 \
+  --email buyer@example.com \
+  --idempotency-key 11111111-1111-4111-8111-111111111111 \
+  --json
 ```
 
-This command only creates a `https://www.tixbit.com/checkout/process` link. The buyer opens it in a browser, signs in, reviews the order, and completes payment on TixBit.
+`checkout` remains link-only: it creates a `https://www.tixbit.com/checkout/process` URL for browser completion. `purchase` is the separate public MPP machine surface. It uses the official `mppx` client to answer the server's HTTP 402 challenge and currently selects the Tempo one-time charge rail configured by the server.
+
+`--email` is always required and is never inferred from git or local account state. If a request times out or returns `pending` or `manual_review_required`, reuse the same idempotency key and follow the returned `action`; do not start another payment.
 
 ### View venue seatmap
 
@@ -70,6 +80,7 @@ tixbit search "concert" --state NY --json
 tixbit listings <event-id> --json
 tixbit seatmap <event-id> --json
 tixbit checkout <listing-id> --quantity 2 --json
+tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --json
 ```
 
 ### All commands
@@ -80,6 +91,7 @@ tixbit checkout <listing-id> --quantity 2 --json
 | `browse` | Browse upcoming events near a location |
 | `listings <eventId>` | Get available ticket listings for an event |
 | `checkout <listingId>` | Get a checkout link to buy tickets |
+| `purchase <listingId>` | Buy a selected listing through MPP |
 | `seatmap <eventId>` | Show the venue seating chart with all sections |
 | `url <slug>` | Print the TixBit event page URL |
 
@@ -141,6 +153,36 @@ const nearby = await tixbit.browse({
 const url = tixbit.eventUrl(event.external_event_id);
 ```
 
+### SDK machine purchase
+
+Wire the official `mppx` client into `paymentFetch`. The private payment key stays in the mppx account/keychain or `MPPX_PRIVATE_KEY`; it is never passed to TixBit SDK configuration.
+
+```ts
+import { TixBitClient } from "tixbit";
+import { Mppx, tempo } from "mppx/client";
+import { resolveAccount } from "mppx/cli";
+
+const account = await resolveAccount();
+const payments = Mppx.create({
+  methods: [tempo({ account })],
+  polyfill: false,
+});
+const tixbit = new TixBitClient({
+  paymentFetch: (input, init) => payments.fetch(input, init),
+});
+
+const result = await tixbit.purchaseTickets({
+  listingId: "LISTING123",
+  quantity: 2,
+  email: "buyer@example.com",
+  idempotencyKey: "11111111-1111-4111-8111-111111111111",
+});
+
+console.log(JSON.stringify(result, null, 2));
+// fulfilled: { status, orderReference, receiptUrl, order, ... }
+// recovery:  { status: "pending" | "manual_review_required", action, ... }
+```
+
 ## API Reference
 
 ### `new TixBitClient(config?)`
@@ -149,8 +191,10 @@ const url = tixbit.eventUrl(event.external_event_id);
 |---|---|---|
 | `baseUrl` | `string` | `https://www.tixbit.com` |
 | `timeoutMs` | `number` | `15000` |
+| `paymentEndpoint` | `string` | `https://mcp.tixbit.com/api/purchase`; HTTPS TixBit hosts or loopback QA only |
+| `paymentFetch` | `typeof fetch` | Fetch used for MPP; supply the official `mppx.fetch` |
 
-Public buyer discovery requires no API key.
+All public TixBit SDK operations require no TixBit API key. MPP payment credentials are handled by the configured payment client and are sent only in the standard payment authorization header.
 
 ### `searchEvents(params?)`
 
@@ -217,7 +261,7 @@ Returns one sanitized public listing and any public disclosures for it.
 
 ### `createCheckoutLink(params)`
 
-Create a checkout URL for a listing. The user opens this in a browser to review and complete the purchase on TixBit. This SDK does not expose a purchase endpoint.
+Create a checkout URL for a listing. The user opens this in a browser to review and complete the purchase on TixBit. This link-only method is unchanged by machine checkout.
 
 | Param | Type | Description |
 |---|---|---|
@@ -225,6 +269,20 @@ Create a checkout URL for a listing. The user opens this in a browser to review 
 | `quantity` | `number` | Number of tickets (1–8) |
 
 Returns `{ url, listingId, quantity }`.
+
+### `purchaseTickets(params)`
+
+Purchase a selected listing and quantity through the public MPP endpoint. TixBit prepares inventory and determines the listing price, currency, fees, and final amount on the server before issuing the challenge.
+
+| Param | Type | Description |
+|---|---|---|
+| `listingId` | `string` | Listing ID selected from current listings |
+| `quantity` | `number` | Number of tickets (1–8) |
+| `email` | `string` | Required buyer email; normalized and validated before the request |
+| `name` | `string` | Optional buyer/recipient name |
+| `idempotencyKey` | `string` | Unguessable UUID v4 retry/recovery identity; generated when omitted |
+
+Returns agent-readable JSON with `status`, `idempotencyKey`, `orderReference`, `receiptUrl` when available, optional server-authoritative `order`, and an `action` for non-final states. Network ambiguity resolves to `pending` instead of claiming failure.
 
 ### `getSeatmap(params)`
 
@@ -243,6 +301,8 @@ Returns the full URL to the event page on `www.tixbit.com`.
 | Variable | Description | Default |
 |---|---|---|
 | `TIXBIT_BASE_URL` | Override the TixBit URL | `https://www.tixbit.com` |
+| `TIXBIT_PAYMENT_URL` | Override with an HTTPS TixBit endpoint or loopback URL for local QA | `https://mcp.tixbit.com/api/purchase` |
+| `MPPX_PRIVATE_KEY` | Optional mppx account source; prefer the OS keychain | mppx keychain |
 
 ## Requirements
 
