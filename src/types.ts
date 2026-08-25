@@ -16,6 +16,19 @@ export interface TixBitConfig {
    */
   timeoutMs?: number;
 
+  /**
+   * Public TixBit MPP purchase endpoint.
+   * HTTPS TixBit hosts are accepted; loopback HTTP is allowed for local QA.
+   * @default "https://mcp.tixbit.com/api/purchase"
+   */
+  paymentEndpoint?: string;
+
+  /**
+   * Fetch implementation used for purchases. Supply `mppx.fetch` to
+   * automatically answer an MPP 402 challenge and retry with a credential.
+   */
+  paymentFetch?: typeof fetch;
+
 }
 
 // ── Events ──────────────────────────────────────────────────────────────────
@@ -208,6 +221,56 @@ export interface CheckoutLink {
   listingId: string;
   /** Ticket quantity. */
   quantity: number;
+}
+
+// ── Machine checkout ─────────────────────────────────────────────────
+
+export interface PurchaseTicketsParams {
+  /** Listing ID selected from `getListings`. */
+  listingId: string;
+  /** Number of tickets to purchase (1–8). */
+  quantity: number;
+  /** Required buyer email for confirmation and ticket delivery. */
+  email: string;
+  /** Optional buyer/recipient name. */
+  name?: string;
+  /** Stable value to reuse across retries and recovery checks. */
+  idempotencyKey?: string;
+}
+
+export type PurchaseStatus =
+  | "fulfilled"
+  | "payment_required"
+  | "pending"
+  | "manual_review_required"
+  | "payment_failed"
+  | "rejected";
+
+export interface PurchaseOrder {
+  reference: string;
+  status: PurchaseStatus;
+  listingId: string;
+  quantity: number;
+  pricePerTicket: number;
+  subtotal: number;
+  fees: number;
+  total: number;
+  currency: string;
+  section?: string;
+  row?: string;
+}
+
+/** Agent-readable outcome from the MPP machine checkout flow. */
+export interface PurchaseTicketsResult {
+  success: boolean;
+  status: PurchaseStatus;
+  idempotencyKey: string;
+  orderReference: string | null;
+  receiptUrl: string | null;
+  order?: PurchaseOrder;
+  paid?: boolean;
+  error?: { code: string; message: string };
+  action?: string;
 }
 
 // ── Homepage / Browse ───────────────────────────────────────────────────────

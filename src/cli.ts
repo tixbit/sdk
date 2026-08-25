@@ -5,6 +5,7 @@
 //   tixbit search "Hawks" --state GA
 //   tixbit browse --city Atlanta --state GA
 //   tixbit listings <eventId>
+//   tixbit purchase <listingId> --quantity 2 --email buyer@example.com
 //   tixbit url <slug>
 //
 // Output: JSON (for piping to agents) or human-readable tables.
@@ -13,7 +14,7 @@
 
 import { Command } from "commander";
 import { createRequire } from "node:module";
-import { TixBitClient } from "./client.js";
+import { normalizePurchaseTicketsParams, TixBitClient } from "./client.js";
 import type {
   SearchEventsParams,
   BrowseEventsParams,
@@ -22,6 +23,7 @@ import type {
   TixBitListing,
   SeatmapResult,
   SeatmapSection,
+  PurchaseTicketsResult,
 } from "./types.js";
 
 const client = new TixBitClient({
@@ -48,6 +50,26 @@ function output(data: unknown, json: boolean): void {
   }
 
   process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+}
+
+function outputPurchaseResult(result: PurchaseTicketsResult): void {
+  if (result.success && result.order) {
+    process.stdout.write(
+      `\nPurchase complete\n\n` +
+        `  Order: ${result.orderReference}\n` +
+        `  Tickets: ${result.order.quantity}\n` +
+        `  Total: ${result.order.currency} ${result.order.total.toFixed(2)}\n` +
+        (result.receiptUrl ? `  Receipt: ${result.receiptUrl}\n` : "") +
+        "\n",
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `\nPurchase ${result.status}\n\n` +
+      `  Order: ${result.orderReference ?? "not assigned"}\n` +
+      `  Action: ${result.action ?? "Review the JSON result before retrying."}\n\n`,
+  );
 }
 
 function formatItem(item: unknown): string {
@@ -101,7 +123,7 @@ function handleError(err: unknown): never {
 
 const program = new Command()
   .name("tixbit")
-  .description("Search events, browse listings, and get TixBit checkout links")
+  .description("Search events, browse listings, and buy TixBit tickets")
   .version(packageJson.version);
 
 // ── search ──────────────────────────────────────────────────────────────────
@@ -352,6 +374,100 @@ program
       );
     } catch (err) {
       handleError(err);
+    }
+  });
+
+// ── purchase ───────────────────────────────────────────────────────────────────────────
+
+program
+  .command("purchase <listingId>")
+  .description("Buy tickets through MPP machine checkout")
+  .requiredOption("--quantity <n>", "Number of tickets to buy")
+  .option("--email <email>", "Buyer email for confirmation and delivery")
+  .option("--name <name>", "Optional buyer/recipient name")
+  .option(
+    "--idempotency-key <uuid>",
+    "Stable UUID v4 to reuse for retries and recovery",
+  )
+  .option("--account <name>", "mppx account name")
+  .option("--json", "Output agent-readable JSON", false)
+  .action(async (listingId: string, opts: {
+    quantity: string;
+    email?: string;
+    name?: string;
+    idempotencyKey?: string;
+    account?: string;
+    json: boolean;
+  }) => {
+    let publicErrorCode = "INVALID_PURCHASE_REQUEST";
+    let publicErrorMessage = "Invalid purchase request.";
+    try {
+      if (!opts.email?.trim()) {
+        throw new TypeError("--email is required for machine purchases");
+      }
+      const purchase = normalizePurchaseTicketsParams({
+        listingId,
+        quantity: Number(opts.quantity),
+        email: opts.email,
+        name: opts.name,
+        idempotencyKey: opts.idempotencyKey,
+      });
+      const paymentEndpoint = process.env.TIXBIT_PAYMENT_URL;
+      new TixBitClient({ paymentEndpoint });
+      publicErrorCode = "MPP_CLIENT_SETUP_FAILED";
+      publicErrorMessage =
+        "MPP payment client setup failed. Check the selected mppx account and local wallet configuration.";
+
+      const [{ Mppx, tempo }, { resolveAccount }] = await Promise.all([
+        import("mppx/client"),
+        import("mppx/cli"),
+      ]);
+      const account = await resolveAccount(opts.account);
+      const payments = Mppx.create({
+        methods: [tempo({ account })],
+        polyfill: false,
+      });
+      const purchaseClient = new TixBitClient({
+        baseUrl: process.env.TIXBIT_BASE_URL,
+        paymentEndpoint,
+        paymentFetch: (input, init) => payments.fetch(input, init),
+      });
+      const result = await purchaseClient.purchaseTickets(purchase);
+
+      if (opts.json) {
+        output(result, true);
+      } else {
+        outputPurchaseResult(result);
+      }
+      if (!result.success) process.exitCode = 2;
+    } catch (err) {
+      const message =
+        publicErrorCode === "INVALID_PURCHASE_REQUEST" && err instanceof Error
+          ? err.message
+          : publicErrorMessage;
+      if (!opts.json) {
+        process.stderr.write(`Error: ${message}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      output(
+        {
+          success: false,
+          status: "rejected",
+          orderReference: null,
+          receiptUrl: null,
+          error: {
+            code: publicErrorCode,
+            message,
+          },
+          action:
+            publicErrorCode === "INVALID_PURCHASE_REQUEST"
+              ? "Correct the request before attempting payment."
+              : "Fix the local mppx account configuration, then retry with the same idempotency key.",
+        },
+        true,
+      );
+      process.exitCode = 1;
     }
   });
 

@@ -1,7 +1,7 @@
 {
   "name": "tixbit",
   "version": "0.1.2",
-  "description": "Search events, browse listings, view seatmaps, and get TixBit checkout links",
+  "description": "Search events, browse listings, view seatmaps, and purchase TixBit tickets through MPP",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -17,6 +17,7 @@
   "files": [
     "dist/*.js",
     "dist/*.d.ts",
+    "skills/tixbit/SKILL.md",
     "README.md",
     "LICENSE"
   ],
@@ -29,7 +30,8 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "mppx": "^0.8.15"
   },
   "devDependencies": {
     "@types/node": "20.19.25",
@@ -45,6 +47,8 @@
     "tickets",
     "events",
     "seatmap",
+    "mpp",
+    "machine-payments",
     "seating-chart",
     "cli",
     "sdk",
