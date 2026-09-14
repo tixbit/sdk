@@ -31,9 +31,21 @@ npx tixbit checkout <listingId> --quantity 2 --json
 npx tixbit purchase <listingId> \
   --quantity 2 \
   --email buyer@example.com \
+  --confirm --max-price <approved-total-usd> \
   --idempotency-key <stable-uuid-v4> \
   --json
 ```
+
+## Additional commands (requires this build or a later release)
+
+- `tixbit quote <eventId> --size 100`: refresh existing listings; requires live freshness.
+- `tixbit buy <listingId> --quantity 2 --max-price <total-usd>`: quote only using `TIXBIT_EMAIL`.
+- Add `--confirm` only after approval; inject `TIXBIT_LINK_TOKEN` securely. Never put tokens in arguments. Payment requires server cap support and carries the cap to the server.
+- Link supports 4-12 alphanumeric IDs only, not native `sl_UUID` listings. Use browser checkout for unsupported listings.
+- `tixbit sell list` and `tixbit sell create --confirm < listing.json` require `TIXBIT_ACCESS_TOKEN` and existing seller gates. Creation also requires explicit `termsAccepted: true`. Submission is not necessarily live.
+- All commands emit JSON, including errors. Preserve full case-sensitive IDs.
+- Never retry uncertain Link payment automatically. Reconcile with support and Stripe Link first. Read seller listings after uncertain creation.
+- No bids or negotiation are available. Do not claim a price reduction.
 
 ## Required workflow
 

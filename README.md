@@ -54,6 +54,7 @@ npx mppx account create
 tixbit purchase <listing-id> \
   --quantity 2 \
   --email buyer@example.com \
+  --confirm --max-price 300.00 \
   --idempotency-key 11111111-1111-4111-8111-111111111111 \
   --json
 ```
@@ -61,6 +62,39 @@ tixbit purchase <listing-id> \
 `checkout` remains link-only: it creates a `https://www.tixbit.com/checkout/process` URL for browser completion. `purchase` is the separate public MPP machine surface. It uses the official `mppx` client to answer the server's HTTP 402 challenge and currently selects the Tempo one-time charge rail configured by the server.
 
 `--email` is always required and is never inferred from git or local account state. If a request times out or returns `pending` or `manual_review_required`, reuse the same idempotency key and follow the returned `action`; do not start another payment.
+
+### Live inventory, Stripe Link, and seller commands
+
+These additions require a build of this PR or a later authorized package release. The existing registry package is still named `tixbit`; this PR does not publish it.
+
+```sh
+# Refreshed listings, not a reservation. Fails if live freshness is unavailable.
+tixbit quote <eventId> --page 1 --size 100
+
+# TIXBIT_EMAIL must be supplied by the buyer. This does not send a payment token.
+tixbit buy <listingId> --quantity 2 --max-price 300.00
+
+# After explicit buyer approval and secure TIXBIT_LINK_TOKEN injection:
+tixbit buy <listingId> --quantity 2 --max-price 300.00 --confirm
+
+# Requires TIXBIT_ACCESS_TOKEN and the existing seller access/feature gates:
+tixbit sell list
+tixbit sell create --confirm < listing.json
+```
+
+`--max-price` is the total USD charge ceiling including ticket fees, not a per-ticket price or a bid. Link checkout sends `maxAmountCents` in both POST requests and refuses payment unless the quote advertises `maxAmountCentsSupported: true`. This needs the backend contract in [monorepo PR #1827](https://github.com/tixbit/tixbit-monorepo/pull/1827). The backend rechecks its actual charge before payment. Link currently accepts only 4-12 alphanumeric listing IDs. Native `sl_UUID` listings are not supported by this payment backend; use link-only `checkout` for browser completion instead.
+
+No Link payment request is automatically retried. An uncertain Link response returns `status: "unknown"` and requires reconciliation with TixBit support and Stripe Link before another attempt. A successful payment response is not a guarantee of completed ticket delivery. No negotiation API or command is provided.
+
+Seller JSON uses the existing web API schema. Example after seller approval:
+
+```json
+{"externalEventId":"AbCd12","section":"GA","quantity":2,"generalAdmission":true,"priceCents":10000,"termsAccepted":true}
+```
+
+`priceCents` is the seller's per-ticket asking price, unlike the buyer's total cap. Optional fields include `row`, `seatNumbers`, `faceValueCents`, `assetPaths`, `disclosures`, and `notes`; the server validates them and enforces seller access. Creation requires both `--confirm` and `termsAccepted: true`. Submission is not a claim that the listing is live. After uncertain creation, inspect `sell list` before retrying.
+
+MPP `purchase` retains the official mppx path but now requires `--confirm`, `--max-price`, and an explicit `--idempotency-key` before wallet loading. Its challenge hook checks the pathUSD atomic amount before any credential is created, rejects unknown assets/recurring intents, and permits only one payment challenge. The cap covers the ticket charge; network fees, if any, are managed separately by the wallet. SDK callers who inject their own `paymentFetch` own its authorization policy: use `assertMppChallenge` in `onChallenge` as shown below and get user approval before calling `purchaseTickets`. Do not register credential-producing event handlers that bypass this hook.
 
 ### View venue seatmap
 
@@ -71,16 +105,16 @@ tixbit seatmap <event-id> --section <section-name>
 
 ### JSON output (for agents / scripting)
 
-Every command supports `--json` for machine-readable output:
+Every command now emits JSON by default, including help, version, parser errors, and request errors. `--json` remains accepted. Successful discovery results keep their existing fields and add `success: true`. Exit codes: 0 for success, 1 for invalid input/request failure, 2 for a non-final or unsuccessful result.
 
-> Event IDs are normalized to public external IDs; provider prefixes are stripped from SDK/CLI results.
+> Event and listing IDs are case-sensitive. Copy the full ID from discovery. The SDK no longer changes case, strips prefixes, or repairs whitespace in purchase IDs.
 
 ```sh
 tixbit search "concert" --state NY --json
 tixbit listings <event-id> --json
 tixbit seatmap <event-id> --json
 tixbit checkout <listing-id> --quantity 2 --json
-tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --json
+tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --confirm --max-price 300.00 --idempotency-key <uuid-v4> --json
 ```
 
 ### All commands
@@ -91,7 +125,10 @@ tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --json
 | `browse` | Browse upcoming events near a location |
 | `listings <eventId>` | Get available ticket listings for an event |
 | `checkout <listingId>` | Get a checkout link to buy tickets |
-| `purchase <listingId>` | Buy a selected listing through MPP |
+| `purchase <listingId>` | Buy a selected listing through MPP with explicit confirmation and total cap |
+| `quote <eventId>` | Refresh live listings, with freshness metadata |
+| `buy <listingId>` | Quote or confirm a capped Stripe Link purchase |
+| `sell list` / `sell create` | Use the existing gated seller API |
 | `seatmap <eventId>` | Show the venue seating chart with all sections |
 | `url <slug>` | Print the TixBit event page URL |
 
@@ -158,7 +195,7 @@ const url = tixbit.eventUrl(event.external_event_id);
 Wire the official `mppx` client into `paymentFetch`. The private payment key stays in the mppx account/keychain or `MPPX_PRIVATE_KEY`; it is never passed to TixBit SDK configuration.
 
 ```ts
-import { TixBitClient } from "tixbit";
+import { TixBitClient, assertMppChallenge } from "tixbit";
 import { Mppx, tempo } from "mppx/client";
 import { resolveAccount } from "mppx/cli";
 
@@ -166,6 +203,11 @@ const account = await resolveAccount();
 const payments = Mppx.create({
   methods: [tempo({ account })],
   polyfill: false,
+  maxPaymentRetries: 1,
+  onChallenge: async (challenge) => {
+    assertMppChallenge(challenge, 30000); // approved TOTAL, in USD cents
+    return undefined;
+  },
 });
 const tixbit = new TixBitClient({
   paymentFetch: (input, init) => payments.fetch(input, init),
@@ -191,7 +233,7 @@ console.log(JSON.stringify(result, null, 2));
 |---|---|---|
 | `baseUrl` | `string` | `https://www.tixbit.com` |
 | `timeoutMs` | `number` | `15000` |
-| `paymentEndpoint` | `string` | `https://mcp.tixbit.com/api/purchase`; HTTPS TixBit hosts or loopback QA only |
+| `paymentEndpoint` | `string` | `https://mcp.tixbit.com/api/purchase`; canonical endpoint or loopback QA only |
 | `paymentFetch` | `typeof fetch` | Fetch used for MPP; supply the official `mppx.fetch` |
 
 All public TixBit SDK operations require no TixBit API key. MPP payment credentials are handled by the configured payment client and are sent only in the standard payment authorization header.
@@ -284,6 +326,14 @@ Purchase a selected listing and quantity through the public MPP endpoint. TixBit
 
 Returns agent-readable JSON with `status`, `idempotencyKey`, `orderReference`, `receiptUrl` when available, optional server-authoritative `order`, and an `action` for non-final states. Network ambiguity resolves to `pending` instead of claiming failure.
 
+### Agent SDK methods
+
+- `quoteListings(params: GetListingsParams)` requests refreshed listings and requires live freshness. It preserves the existing listings result shape.
+- `buyTickets({ listingId, quantity, email, maxAmountCents, confirm?, sharedPaymentToken? })` quotes by default. `confirm: true` requires a Link token and server cap support. It never retries a payment; ambiguous outcomes return `success: false`, `status: "unknown"`, and a recovery action.
+- `listSellerListings(accessToken)` reads the existing gated seller API.
+- `createSellerListing(body, accessToken, confirm)` requires `confirm === true` and explicit `termsAccepted: true`. The web API remains the seller schema and access authority.
+- `assertMppChallenge(challenge, maxAmountCents)` rejects unsupported or over-cap MPP challenges. Use it before credential creation in an official mppx `onChallenge` hook, not after `paymentFetch` returns.
+
 ### `getSeatmap(params)`
 
 | Param | Type | Description |
@@ -300,8 +350,11 @@ Returns the full URL to the event page on `www.tixbit.com`.
 
 | Variable | Description | Default |
 |---|---|---|
-| `TIXBIT_BASE_URL` | Override the TixBit URL | `https://www.tixbit.com` |
-| `TIXBIT_PAYMENT_URL` | Override with an HTTPS TixBit endpoint or loopback URL for local QA | `https://mcp.tixbit.com/api/purchase` |
+| `TIXBIT_BASE_URL` | Discovery URL; credential requests accept only the canonical origin or loopback QA | `https://www.tixbit.com` |
+| `TIXBIT_EMAIL` | Explicit buyer delivery email for `buy` | none |
+| `TIXBIT_LINK_TOKEN` | Stripe Link shared payment token, injected securely; never a CLI argument | none |
+| `TIXBIT_ACCESS_TOKEN` | Privy access token for an authorized seller | none |
+| `TIXBIT_PAYMENT_URL` | Canonical MPP endpoint or loopback QA URL; no credentials, query, fragment, or redirects | `https://mcp.tixbit.com/api/purchase` |
 | `MPPX_PRIVATE_KEY` | Optional mppx account source; prefer the OS keychain | mppx keychain |
 
 ## Requirements

@@ -43,10 +43,10 @@ src/
 ## Guidelines
 
 - **TypeScript strict mode** — no `any`, no `@ts-ignore`
-- **Zero runtime dependencies** beyond `commander` (for the CLI)
+- **Runtime dependencies** are `commander` for the CLI and official `mppx` for machine payments
 - **Node `^20.19.0 || >=22.12.0`** — use native `fetch`, no polyfills
 - **CI matrix** — Node 20.19, 22, 24, and 26; Node 20 is compatibility-only because it is end-of-life
-- **Both outputs matter** — human-readable for terminals, `--json` for agents/piping
+- **JSON output** — all commands, help, and errors emit JSON; keep `--json` accepted for existing scripts
 - Run `npm run typecheck` before submitting a PR
 
 ## Adding a new command

@@ -5,7 +5,10 @@
 // Works from the Node.js versions declared in package.json.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { redact, trustedWebBase } from "./safety.js";
 import type {
+  BuyTicketsParams,
+  AgentResult,
   TixBitConfig,
   SearchEventsParams,
   SearchEventsResult,
@@ -45,14 +48,13 @@ function normalizePaymentEndpoint(value: string): string {
     url.hostname === "localhost" ||
     url.hostname === "127.0.0.1" ||
     url.hostname === "[::1]";
-  const isTixBitHost =
-    url.hostname === "tixbit.com" || url.hostname.endsWith(".tixbit.com");
+  const isTixBitHost = url.origin === "https://mcp.tixbit.com" && url.pathname === "/api/purchase";
   if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback)) {
     throw new TypeError(
       "paymentEndpoint must use HTTPS (HTTP is allowed only for loopback QA)",
     );
   }
-  if (url.username || url.password || url.hash) {
+  if (url.username || url.password || url.hash || url.search) {
     throw new TypeError("paymentEndpoint must not contain credentials or a fragment");
   }
   if (!isLoopback && !isTixBitHost) {
@@ -65,19 +67,7 @@ function normalizePaymentEndpoint(value: string): string {
 }
 
 function normalizeExternalEventId(eventId: string): string {
-  if (!eventId) return eventId;
-
-  const trimmed = eventId.trim();
-  const providerPrefixedId = trimmed.match(/^([a-z]{5,})-([A-Z0-9]{6,})$/i);
-  if (providerPrefixedId?.[2]) {
-    return providerPrefixedId[2].toUpperCase();
-  }
-
-  if (/^[A-Z0-9]{6,}$/i.test(trimmed)) {
-    return trimmed.toUpperCase();
-  }
-
-  return trimmed;
+  return eventId;
 }
 
 function toAbsoluteUrl(baseUrl: string, value: string | null | undefined): string | null {
@@ -117,14 +107,14 @@ export class TixBitClient {
 
     try {
       const res = await fetch(url, {
+        redirect: "error",
         headers,
         signal: controller.signal,
       });
 
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
         throw new TixBitApiError(
-          `${res.status} ${res.statusText}: ${text.slice(0, 300)}`,
+          `Request failed (HTTP ${res.status})`,
           res.status,
           url,
         );
@@ -321,6 +311,74 @@ export class TixBitClient {
     };
   }
 
+  /** Refreshed inventory, not a reservation or negotiated offer. */
+  async quoteListings(params: GetListingsParams): Promise<GetListingsResult> {
+    if (!params.eventId || params.eventId !== params.eventId.trim()) throw new TypeError("Copy the exact event ID from search");
+    if (params.size !== undefined && (!Number.isInteger(params.size) || params.size < 1 || params.size > 100)) throw new RangeError("size must be 1-100");
+    const result = await this.getListings({ ...params, refresh: true });
+    if (result.meta.freshness !== "live") throw new Error("Live inventory is unavailable; no live quote can be provided");
+    return result;
+  }
+
+  private async agentRequest(path: string, body?: unknown, token?: string): Promise<AgentResult> {
+    const base = trustedWebBase(this.baseUrl);
+    const headers: Record<string, string> = { Accept: "application/json", "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${base}${path}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers,
+      redirect: "error",
+      signal: AbortSignal.timeout(this.timeoutMs),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }).catch(() => { throw new Error("Request did not complete; reconcile any write before retrying"); });
+    if (!response.ok) throw new TixBitApiError(`Request failed (HTTP ${response.status})`, response.status, `${base}${path}`);
+    const result = await response.json().catch(() => { throw new Error("Invalid server response"); }) as AgentResult;
+    if (result?.success !== true || !result.data || typeof result.data !== "object" || Array.isArray(result.data)) throw new Error("Invalid server response");
+    return redact(result, [token ?? ""]) as AgentResult;
+  }
+
+  /** Stripe Link checkout. No confirmation means quote only. Never retries payment. */
+  async buyTickets(params: BuyTicketsParams): Promise<AgentResult> {
+    trustedWebBase(this.baseUrl);
+    if (!/^[A-Za-z0-9]{4,12}$/.test(params.listingId)) throw new TypeError("Link supports 4-12 alphanumeric listing IDs only; use browser checkout for native listings");
+    if (!Number.isInteger(params.quantity) || params.quantity < 1 || params.quantity > 8) throw new RangeError("quantity must be 1-8");
+    if (!Number.isSafeInteger(params.maxAmountCents) || params.maxAmountCents <= 0) throw new RangeError("A positive total maxAmountCents is required");
+    const email = normalizeBuyerEmail(params.email);
+    if (params.confirm === true && !/^spt_[A-Za-z0-9_]+$/.test(params.sharedPaymentToken ?? "")) throw new TypeError("Inject a valid TIXBIT_LINK_TOKEN before confirming");
+    const body = { listingId: params.listingId, quantity: params.quantity, email, maxAmountCents: params.maxAmountCents };
+    const quote = await this.agentRequest("/api/agentic/checkout", body);
+    const validQuote = (data: Record<string, unknown> | undefined) => data &&
+      data.listingId === params.listingId && data.quantity === params.quantity && data.currency === "usd" &&
+      Number.isSafeInteger(data.amountCents) && (data.amountCents as number) > 0 && (data.amountCents as number) <= params.maxAmountCents;
+    if (!validQuote(quote.data)) throw new Error("Checkout quote is invalid or exceeds the approved total; no payment sent");
+    if (params.confirm !== true) return quote;
+    if (quote.data?.maxAmountCentsSupported !== true) throw new Error("Server does not support the total cap; no payment sent");
+    try {
+      const paid = await this.agentRequest("/api/agentic/checkout", { ...body, sharedPaymentToken: params.sharedPaymentToken });
+      if (!validQuote(paid.data) || typeof paid.data?.orderId !== "string" || typeof paid.data?.status !== "string") throw new Error("Invalid payment outcome");
+      // Payment acceptance is not a claim that ticket delivery is complete.
+      return { success: true, data: { listingId: params.listingId, quantity: params.quantity, amountCents: paid.data.amountCents, currency: "usd", orderId: paid.data.orderId, status: paid.data.status }, action: "Payment accepted. Check order fulfillment before any further purchase." };
+    } catch {
+      return { success: false, status: "unknown", error: { code: "PAYMENT_OUTCOME_UNKNOWN", message: "Payment or fulfillment status is unknown." }, action: "Do not retry or send another token. Reconcile this purchase with TixBit support and Stripe Link first." };
+    }
+  }
+
+  async listSellerListings(accessToken: string): Promise<AgentResult> {
+    if (!accessToken) throw new TypeError("TIXBIT_ACCESS_TOKEN is required");
+    return this.agentRequest("/api/sell/listings", undefined, accessToken);
+  }
+
+  async createSellerListing(body: unknown, accessToken: string, confirm: boolean): Promise<AgentResult> {
+    trustedWebBase(this.baseUrl);
+    if (confirm !== true || !accessToken) throw new TypeError("Seller creation requires confirmation and TIXBIT_ACCESS_TOKEN");
+    if (!body || typeof body !== "object" || Array.isArray(body) || !("termsAccepted" in body) || body.termsAccepted !== true) throw new TypeError("Listing JSON must explicitly include termsAccepted: true after seller approval");
+    try {
+      return await this.agentRequest("/api/sell/listings", body, accessToken);
+    } catch {
+      return { success: false, status: "unknown", error: { code: "SELLER_CREATE_UNCONFIRMED", message: "Listing creation was not confirmed." }, action: "Read sell list and reconcile before retrying. Submission does not guarantee a live listing." };
+    }
+  }
+
   // ── Checkout Link ──────────────────────────────────────────────────────────
 
   /**
@@ -341,7 +399,7 @@ export class TixBitClient {
    * ```
    */
   createCheckoutLink(params: CheckoutParams): CheckoutLink {
-    const listingId = params.listingId.trim();
+    const listingId = params.listingId;
     if (!/^[A-Za-z0-9_-]{2,50}$/.test(listingId)) {
       throw new TypeError(
         "listingId must be 2-50 letters, numbers, hyphens, or underscores",
@@ -689,7 +747,7 @@ export function normalizePurchaseTicketsParams(
   params: PurchaseTicketsParams,
 ): Required<Pick<PurchaseTicketsParams, "listingId" | "quantity" | "email">> &
   Pick<PurchaseTicketsParams, "name"> & { idempotencyKey: string } {
-  const listingId = params.listingId.trim();
+  const listingId = params.listingId;
   if (!/^[A-Za-z0-9_-]{2,100}$/.test(listingId)) {
     throw new TypeError(
       "listingId must be 2-100 letters, numbers, hyphens, or underscores",
@@ -700,7 +758,7 @@ export function normalizePurchaseTicketsParams(
   }
 
   const email = normalizeBuyerEmail(params.email);
-  const idempotencyKey = params.idempotencyKey?.trim() || crypto.randomUUID();
+  const idempotencyKey = params.idempotencyKey ?? crypto.randomUUID();
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       idempotencyKey,
