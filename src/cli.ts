@@ -341,19 +341,25 @@ program.command("quote <eventId>")
     } catch (error) { handleError(error); }
   });
 
+program.command("auth")
+  .description("Show public browser sign-in and wallet setup; does not create a CLI session")
+  .option("--json", "Output JSON", true)
+  .action(() => output(client.getAuthorizationInfo(), true));
+
 program.command("buy <listingId>")
   .description("Quote or confirm Stripe Link checkout (4-12 alphanumeric listing IDs only)")
   .requiredOption("--quantity <n>", "Number of tickets (1-8)")
   .requiredOption("--max-price <total>", "Maximum TOTAL USD charge including fees")
-  .option("--confirm", "Send the approved Stripe Link token", false)
+  .option("--email <email>", "Buyer delivery email (or TIXBIT_EMAIL)")
+  .option("--confirm", "Approve payment; return browser handoff if wallet authorization is missing", false)
   .option("--json", "Output JSON", true)
-  .action(async (listingId: string, opts: { quantity: string; maxPrice: string; confirm: boolean }) => {
+  .action(async (listingId: string, opts: { quantity: string; maxPrice: string; confirm: boolean; email?: string }) => {
     try {
-      output(await client.buyTickets({ listingId, quantity: positiveInteger(opts.quantity, "--quantity", 8), maxAmountCents: usdCents(opts.maxPrice), email: process.env.TIXBIT_EMAIL ?? "", confirm: opts.confirm, sharedPaymentToken: process.env.TIXBIT_LINK_TOKEN }), true);
+      output(await client.buyTickets({ listingId, quantity: positiveInteger(opts.quantity, "--quantity", 8), maxAmountCents: usdCents(opts.maxPrice), email: opts.email ?? process.env.TIXBIT_EMAIL ?? "", confirm: opts.confirm, sharedPaymentToken: process.env.TIXBIT_LINK_TOKEN }), true);
     } catch (error) { handleError(error); }
   });
 
-const sell = program.command("sell").description("Seller API (requires Privy access and seller gates)");
+const sell = program.command("sell").description("Seller browser sign-in or optional authorized user integration");
 sell.command("list").option("--json", "Output JSON", true)
   .action(async () => {
     try { output(await client.listSellerListings(process.env.TIXBIT_ACCESS_TOKEN ?? ""), true); }
@@ -364,6 +370,10 @@ sell.command("create").option("--confirm", "Approve listing creation and seller 
   .action(async (opts: { confirm: boolean }) => {
     try {
       if (!opts.confirm) throw new TypeError("sell create requires --confirm and approved listing JSON on stdin");
+      if (!process.env.TIXBIT_ACCESS_TOKEN) {
+        output(await client.listSellerListings(), true);
+        return;
+      }
       if (process.stdin.isTTY) throw new TypeError("Provide listing JSON on stdin");
       let input = "";
       for await (const chunk of process.stdin) {

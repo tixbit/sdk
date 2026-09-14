@@ -23,6 +23,45 @@ function run(args: string[], scenario = "ok", input = "", extraEnv: Record<strin
 }
 const buy = ["buy", "AbCd12", "--quantity", "2", "--max-price", "25.00"];
 describe("mocked CLI wiring", () => {
+  const cleanAuth = { TIXBIT_EMAIL: "", TIXBIT_LINK_TOKEN: "", TIXBIT_ACCESS_TOKEN: "", TIXBIT_API_KEY: "" };
+  it("provides public sign-in guidance without keys or a false login claim", () => {
+    const r = run(["auth"], "ok", "", cleanAuth);
+    expect(r.status).toBe(0);
+    expect(r.calls).toHaveLength(0);
+    expect(r.data).toMatchObject({ apiKeyRequired: false, cliSessionSupported: false, signInUrl: "https://www.tixbit.com/sign-in" });
+  });
+  it.each([["search", "Fixture"], ["browse"], ["listings", "AbCd12"], ["quote", "AbCd12"], ["checkout", "AbCd12", "--quantity", "2"], ["url", "AbCd12"]])("works without credentials: %j", (...args) => {
+    const r = run(args, "ok", "", cleanAuth);
+    expect(r.status).toBe(0);
+    for (const call of r.calls) expect(call.headers.Authorization).toBeUndefined();
+  });
+  it("quotes Link without credentials and checks MPP approval without an API key", () => {
+    const quote = run([...buy, "--email", "buyer@example.com"], "ok", "", cleanAuth);
+    expect(quote.status).toBe(0);
+    expect(quote.calls).toHaveLength(1);
+    expect(quote.calls[0].body.sharedPaymentToken).toBeUndefined();
+    const mpp = run(["purchase", "AbCd12", "--quantity", "2", "--email", "buyer@example.com", "--max-price", "25"], "ok", "", cleanAuth);
+    expect(mpp.data.error.message).toContain("--confirm");
+    expect(mpp.calls).toHaveLength(0);
+    const seatmap = run(["seatmap", "AbCd12"], "ok", "", cleanAuth);
+    expect(seatmap.calls).toHaveLength(1);
+    expect(seatmap.calls[0].headers.Authorization).toBeUndefined();
+  });
+  it("accepts an explicit email and hands off payment without manual token setup", () => {
+    const r = run([...buy, "--email", "buyer@example.com", "--confirm"], "ok", "", cleanAuth);
+    expect(r.status).toBe(2);
+    expect(r.calls).toHaveLength(0);
+    expect(r.data).toMatchObject({ success: false, status: "authorization_required", data: { checkoutUrl: "https://www.tixbit.com/checkout/process?listing=AbCd12&quantity=2" } });
+    expect(r.data.action).toContain("Review and approve");
+  });
+  it.each([["sell", "list"], ["sell", "create", "--confirm"]])("hands off seller sign-in without reading stdin or calling a protected API: %j", (...args) => {
+    const r = run(args, "ok", "", cleanAuth);
+    expect(r.status).toBe(2);
+    expect(r.calls).toHaveLength(0);
+    expect(r.data.status).toBe("authorization_required");
+    expect(r.data.data.signInUrl).toBe("https://www.tixbit.com/sign-in");
+    expect(r.data.action).not.toContain("TIXBIT_ACCESS_TOKEN");
+  });
   it("searches with exact IDs and JSON by default", () => {
     const r = run(["search", "Fixture", "--state", "GA"]);
     expect(r.status).toBe(0);

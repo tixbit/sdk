@@ -39,10 +39,11 @@ npx tixbit purchase <listingId> \
 ## Additional commands (requires this build or a later release)
 
 - `tixbit quote <eventId> --size 100`: refresh existing listings; requires live freshness.
-- `tixbit buy <listingId> --quantity 2 --max-price <total-usd>`: quote only using `TIXBIT_EMAIL`.
-- Add `--confirm` only after approval; inject `TIXBIT_LINK_TOKEN` securely. Never put tokens in arguments. Payment requires server cap support and carries the cap to the server.
+- `tixbit auth`: public browser sign-in and wallet setup links; not a CLI login. No command needs a developer API key.
+- `tixbit buy <listingId> --quantity 2 --max-price <total-usd> --email <buyer-email>`: quote only, no payment credential required.
+- Add `--confirm` only after approval. Without payment authorization, the result is `authorization_required` with a browser checkout URL, not a payment. Review the final total in the browser; the CLI cap is not transferred there. Optional advanced integrations can inject a user-approved `TIXBIT_LINK_TOKEN`; automatic payment still requires server cap support. Never put tokens in arguments.
 - Link supports 4-12 alphanumeric IDs only, not native `sl_UUID` listings. Use browser checkout for unsupported listings.
-- `tixbit sell list` and `tixbit sell create --confirm < listing.json` require `TIXBIT_ACCESS_TOKEN` and existing seller gates. Creation also requires explicit `termsAccepted: true`. Submission is not necessarily live.
+- Without a signed-in user integration, seller commands return browser sign-in guidance and do not read or submit listings. Browser-to-CLI seller sessions are not supported. Do not extract browser tokens. Optional authorized integrations may supply `TIXBIT_ACCESS_TOKEN`; seller creation still requires `--confirm`, `termsAccepted: true`, and server ownership/access checks.
 - All commands emit JSON, including errors. Preserve full case-sensitive IDs.
 - Never retry uncertain Link payment automatically. Reconcile with support and Stripe Link first. Read seller listings after uncertain creation.
 - No bids or negotiation are available. Do not claim a price reduction.

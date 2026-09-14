@@ -2,7 +2,24 @@
 
 Search events, view seatmaps, browse listings, get browser checkout links, and purchase through MPP on [TixBit](https://www.tixbit.com) — from the terminal, your code, or an AI agent.
 
-Discovery, browser checkout links, and machine purchases require no TixBit API key. Machine purchases require an MPP account and an explicit buyer email.
+No command requires a TixBit developer API key. Public discovery and links need no credentials. Purchases require user-approved payment; selling requires user sign-in and seller access.
+
+### User authorization, not API keys
+
+Run `tixbit auth` for public browser sign-in and wallet setup links. This command does not create a CLI session. Open the returned TixBit sign-in page, then complete checkout or selling in your browser. Do not copy browser cookies or bearer tokens.
+
+The public service currently has no supported browser-to-CLI seller session exchange. Website sign-in therefore does not unlock seller API calls from this CLI. Checkout discovery also does not expose the merchant identity needed for automatic Link shared-payment-token authorization. The CLI does not guess it or invent a login endpoint.
+
+For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. It does not by itself authorize this CLI to charge TixBit. Browser checkout is the normal path until automatic authorization is supported; MPP remains available with your wallet.
+
+| Operation | Required user authorization |
+|---|---|
+| Search, browse, listings, quote, seatmap, URL, checkout link | None |
+| `buy` quote | Buyer email via `--email` or optional `TIXBIT_EMAIL` |
+| Browser purchase | Sign in and approve the final payment in the browser |
+| MPP `purchase` | Your mppx wallet, buyer email, confirmation, total cap, recovery UUID |
+| Automatic Link payment | User-approved payment credential from an authorized integration |
+| Seller API | Signed-in user credential and seller access |
 
 ## Install
 
@@ -71,18 +88,24 @@ These additions require a build of this PR or a later authorized package release
 # Refreshed listings, not a reservation. Fails if live freshness is unavailable.
 tixbit quote <eventId> --page 1 --size 100
 
-# TIXBIT_EMAIL must be supplied by the buyer. This does not send a payment token.
-tixbit buy <listingId> --quantity 2 --max-price 300.00
+# Buyer email is explicit; no API key or payment credential is needed.
+tixbit buy <listingId> --quantity 2 --max-price 300.00 --email buyer@example.com
 
-# After explicit buyer approval and secure TIXBIT_LINK_TOKEN injection:
-tixbit buy <listingId> --quantity 2 --max-price 300.00 --confirm
+# Without payment authorization, returns a browser checkout handoff.
+# No payment is sent; review and approve the final total in the browser.
+tixbit buy <listingId> --quantity 2 --max-price 300.00 --email buyer@example.com --confirm
 
-# Requires TIXBIT_ACCESS_TOKEN and the existing seller access/feature gates:
+# Without a signed-in integration, returns browser sign-in and seller links.
 tixbit sell list
-tixbit sell create --confirm < listing.json
 ```
 
-`--max-price` is the total USD charge ceiling including ticket fees, not a per-ticket price or a bid. Link checkout sends `maxAmountCents` in both POST requests and refuses payment unless the quote advertises `maxAmountCentsSupported: true`. This needs the backend contract in [monorepo PR #1827](https://github.com/tixbit/tixbit-monorepo/pull/1827). The backend rechecks its actual charge before payment. Link currently accepts only 4-12 alphanumeric listing IDs. Native `sl_UUID` listings are not supported by this payment backend; use link-only `checkout` for browser completion instead.
+A handoff returns `success: false`, `status: "authorization_required"`, and exit code 2. It is not a completed purchase, listing, or CLI login. The CLI cap is not transferred to browser checkout; review and approve the final total there.
+
+### Optional advanced integrations
+
+Authorized applications may supply a user-approved Link payment credential or a signed-in seller's Privy access token. Optional `TIXBIT_LINK_TOKEN` and `TIXBIT_ACCESS_TOKEN` injection is for these integrations only, not normal onboarding. Neither is a TixBit API key, and no developer or infrastructure key can replace user authorization. Never pass credentials in arguments, log them, or extract them from browser storage. Seller integrations use `tixbit sell create --confirm < listing.json`.
+
+`--max-price` is the total USD charge ceiling including ticket fees, not a per-ticket price or a bid. Link checkout sends `maxAmountCents` in both POST requests and refuses payment unless the quote advertises `maxAmountCentsSupported: true`. Payment requires a public checkout deployment that advertises and enforces the total cap. The backend rechecks its actual charge before payment. Link currently accepts only 4-12 alphanumeric listing IDs. Native `sl_UUID` listings are not supported by this payment backend; use link-only `checkout` for browser completion instead.
 
 No Link payment request is automatically retried. An uncertain Link response returns `status: "unknown"` and requires reconciliation with TixBit support and Stripe Link before another attempt. A successful payment response is not a guarantee of completed ticket delivery. No negotiation API or command is provided.
 
@@ -121,6 +144,7 @@ tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --confirm --
 
 | Command | Description |
 |---|---|
+| `auth` | Public browser sign-in and wallet setup; no CLI session is created |
 | `search [query]` | Search events by keyword, city, state, category, or date |
 | `browse` | Browse upcoming events near a location |
 | `listings <eventId>` | Get available ticket listings for an event |
@@ -330,7 +354,8 @@ Returns agent-readable JSON with `status`, `idempotencyKey`, `orderReference`, `
 
 - `quoteListings(params: GetListingsParams)` requests refreshed listings and requires live freshness. It preserves the existing listings result shape.
 - `buyTickets({ listingId, quantity, email, maxAmountCents, confirm?, sharedPaymentToken? })` quotes by default. `confirm: true` requires a Link token and server cap support. It never retries a payment; ambiguous outcomes return `success: false`, `status: "unknown"`, and a recovery action.
-- `listSellerListings(accessToken)` reads the existing gated seller API.
+- `getAuthorizationInfo()` returns public browser sign-in and wallet setup links without creating a CLI session.
+- `listSellerListings(accessToken?)` reads the gated seller API, or returns browser sign-in guidance when no user credential is supplied.
 - `createSellerListing(body, accessToken, confirm)` requires `confirm === true` and explicit `termsAccepted: true`. The web API remains the seller schema and access authority.
 - `assertMppChallenge(challenge, maxAmountCents)` rejects unsupported or over-cap MPP challenges. Use it before credential creation in an official mppx `onChallenge` hook, not after `paymentFetch` returns.
 
@@ -351,9 +376,9 @@ Returns the full URL to the event page on `www.tixbit.com`.
 | Variable | Description | Default |
 |---|---|---|
 | `TIXBIT_BASE_URL` | Discovery URL; credential requests accept only the canonical origin or loopback QA | `https://www.tixbit.com` |
-| `TIXBIT_EMAIL` | Explicit buyer delivery email for `buy` | none |
-| `TIXBIT_LINK_TOKEN` | Stripe Link shared payment token, injected securely; never a CLI argument | none |
-| `TIXBIT_ACCESS_TOKEN` | Privy access token for an authorized seller | none |
+| `TIXBIT_EMAIL` | Optional alternative to `buy --email` | none |
+| `TIXBIT_LINK_TOKEN` | Optional advanced integration: user-approved Link credential; never an argument | none |
+| `TIXBIT_ACCESS_TOKEN` | Optional advanced integration: signed-in seller user credential, not an API key | none |
 | `TIXBIT_PAYMENT_URL` | Canonical MPP endpoint or loopback QA URL; no credentials, query, fragment, or redirects | `https://mcp.tixbit.com/api/purchase` |
 | `MPPX_PRIVATE_KEY` | Optional mppx account source; prefer the OS keychain | mppx keychain |
 

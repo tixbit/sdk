@@ -337,6 +337,28 @@ export class TixBitClient {
     return redact(result, [token ?? ""]) as AgentResult;
   }
 
+  /** Public browser entry points. This does not create or import a CLI session. */
+  getAuthorizationInfo() {
+    return {
+      apiKeyRequired: false,
+      cliSessionSupported: false,
+      signInUrl: "https://www.tixbit.com/sign-in",
+      sellerUrl: "https://www.tixbit.com/sell",
+      linkWalletUrl: "https://link.com/agents",
+      action: "Sign in in your browser for selling or browser checkout. Browser sign-in does not authenticate this CLI. No TixBit developer API key is needed.",
+    };
+  }
+
+  private sellerAuthorizationRequired(): AgentResult {
+    return {
+      success: false,
+      status: "authorization_required",
+      data: this.getAuthorizationInfo(),
+      error: { code: "SELLER_SIGN_IN_REQUIRED", message: "Seller operations require your signed-in user and seller access." },
+      action: "Open the sign-in URL, then continue on the seller page. Browser-to-CLI session authorization is not supported. No listing was read or submitted; do not copy browser cookies or tokens.",
+    };
+  }
+
   /** Stripe Link checkout. No confirmation means quote only. Never retries payment. */
   async buyTickets(params: BuyTicketsParams): Promise<AgentResult> {
     trustedWebBase(this.baseUrl);
@@ -344,7 +366,16 @@ export class TixBitClient {
     if (!Number.isInteger(params.quantity) || params.quantity < 1 || params.quantity > 8) throw new RangeError("quantity must be 1-8");
     if (!Number.isSafeInteger(params.maxAmountCents) || params.maxAmountCents <= 0) throw new RangeError("A positive total maxAmountCents is required");
     const email = normalizeBuyerEmail(params.email);
-    if (params.confirm === true && !/^spt_[A-Za-z0-9_]+$/.test(params.sharedPaymentToken ?? "")) throw new TypeError("Inject a valid TIXBIT_LINK_TOKEN before confirming");
+    if (params.confirm === true && !params.sharedPaymentToken) {
+      return {
+        success: false,
+        status: "authorization_required",
+        data: { checkoutUrl: this.createCheckoutLink(params).url, maxAmountCents: params.maxAmountCents, automaticPayment: false },
+        error: { code: "PAYMENT_AUTHORIZATION_REQUIRED", message: "A user-approved payment method is required, not a TixBit API key." },
+        action: "Open the checkout URL to sign in and pay in your browser. Review and approve the final total there; this CLI cap is not transferred to browser checkout. No payment was sent. Automatic Link authorization is unavailable without public merchant discovery.",
+      };
+    }
+    if (params.confirm === true && !/^spt_[A-Za-z0-9_]+$/.test(params.sharedPaymentToken ?? "")) throw new TypeError("Invalid user-approved Link payment credential");
     const body = { listingId: params.listingId, quantity: params.quantity, email, maxAmountCents: params.maxAmountCents };
     const quote = await this.agentRequest("/api/agentic/checkout", body);
     const validQuote = (data: Record<string, unknown> | undefined) => data &&
@@ -363,14 +394,15 @@ export class TixBitClient {
     }
   }
 
-  async listSellerListings(accessToken: string): Promise<AgentResult> {
-    if (!accessToken) throw new TypeError("TIXBIT_ACCESS_TOKEN is required");
+  async listSellerListings(accessToken = ""): Promise<AgentResult> {
+    if (!accessToken) return this.sellerAuthorizationRequired();
     return this.agentRequest("/api/sell/listings", undefined, accessToken);
   }
 
   async createSellerListing(body: unknown, accessToken: string, confirm: boolean): Promise<AgentResult> {
     trustedWebBase(this.baseUrl);
-    if (confirm !== true || !accessToken) throw new TypeError("Seller creation requires confirmation and TIXBIT_ACCESS_TOKEN");
+    if (confirm !== true) throw new TypeError("Seller creation requires explicit confirmation");
+    if (!accessToken) return this.sellerAuthorizationRequired();
     if (!body || typeof body !== "object" || Array.isArray(body) || !("termsAccepted" in body) || body.termsAccepted !== true) throw new TypeError("Listing JSON must explicitly include termsAccepted: true after seller approval");
     try {
       return await this.agentRequest("/api/sell/listings", body, accessToken);
