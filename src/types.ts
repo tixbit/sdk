@@ -18,7 +18,7 @@ export interface TixBitConfig {
 
   /**
    * Public TixBit MPP purchase endpoint.
-   * HTTPS TixBit hosts are accepted; loopback HTTP is allowed for local QA.
+   * Only the canonical endpoint is accepted; loopback HTTP is allowed for local QA.
    * @default "https://mcp.tixbit.com/api/purchase"
    */
   paymentEndpoint?: string;
@@ -224,6 +224,24 @@ export interface CheckoutLink {
 }
 
 // ── Machine checkout ─────────────────────────────────────────────────
+
+export interface BuyTicketsParams {
+  listingId: string;
+  quantity: number;
+  email: string;
+  /** Total USD charge ceiling, including fees. */
+  maxAmountCents: number;
+  confirm?: boolean;
+  sharedPaymentToken?: string;
+}
+
+export interface AgentResult {
+  success: boolean;
+  status?: string;
+  data?: Record<string, unknown>;
+  error?: { code: string; message: string };
+  action?: string;
+}
 
 export interface PurchaseTicketsParams {
   /** Listing ID selected from `getListings`. */

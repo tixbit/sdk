@@ -1,6 +1,9 @@
 export { TixBitClient, TixBitApiError, TixBitTimeoutError } from "./client.js";
+export { assertMppChallenge } from "./safety.js";
 export type {
   TixBitConfig,
+  BuyTicketsParams,
+  AgentResult,
   SearchEventsParams,
   SearchEventsResult,
   TixBitEvent,

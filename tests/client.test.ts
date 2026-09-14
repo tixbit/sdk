@@ -138,14 +138,14 @@ describe("TixBitClient", () => {
     const client = new TixBitClient();
     const result = await client.getEvent("provider-EVENT123");
 
-    expect(result.id).toBe("EVENT123");
-    expect(result.external_id).toBe("EVENT123");
+    expect(result.id).toBe("provider-EVENT123");
+    expect(result.external_id).toBe("provider-EVENT123");
     expect(String(vi.mocked(globalThis.fetch).mock.calls[0]?.[0])).toContain(
-      "/api/events/EVENT123",
+      "/api/events/provider-EVENT123",
     );
   });
 
-  it("uses normalized event ids for listings requests", async () => {
+  it("preserves full event ids for listings requests", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(
       jsonResponse({ success: true, data: [], meta: { total: 0, page: 1, size: 50 } }),
     );
@@ -155,11 +155,10 @@ describe("TixBitClient", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
-    expect(String(url)).toContain("/api/events/EVENT123/listings");
-    expect(String(url)).not.toContain("provider-EVENT123");
+    expect(String(url)).toContain("/api/events/provider-EVENT123/listings");
   });
 
-  it("uppercases lowercase external event ids for listings requests", async () => {
+  it("preserves lowercase external event ids for listings requests", async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(
       jsonResponse({ success: true, data: [], meta: { total_count: 0, current_page_number: 1, current_page_size: 100 } }),
     );
@@ -169,8 +168,8 @@ describe("TixBitClient", () => {
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     const [url] = vi.mocked(globalThis.fetch).mock.calls[0] ?? [];
-    expect(String(url)).toContain("/api/events/EVENT123/listings");
-    expect(String(url)).not.toContain("/api/events/event123/listings");
+    expect(String(url)).toContain("/api/events/event123/listings");
+    expect(String(url)).not.toContain("/api/events/EVENT123/listings");
   });
 
   it("maps listings pagination metadata from the live api shape", async () => {
@@ -314,7 +313,7 @@ describe("TixBitClient", () => {
   it("creates only validated canonical browser checkout links", () => {
     const client = new TixBitClient();
     expect(
-      client.createCheckoutLink({ listingId: " LISTING_123 ", quantity: 2 }),
+      client.createCheckoutLink({ listingId: "LISTING_123", quantity: 2 }),
     ).toEqual({
       url: "https://www.tixbit.com/checkout/process?listing=LISTING_123&quantity=2",
       listingId: "LISTING_123",
@@ -680,7 +679,7 @@ describe("TixBitClient", () => {
     const client = new TixBitClient({ baseUrl: "https://www.tixbit.com" });
     const result = await client.getSeatmap({ eventId: "provider-EVENT123" });
 
-    expect(result.event_id).toBe("EVENT123");
+    expect(result.event_id).toBe("provider-EVENT123");
     expect(result.background_image).toBe("https://www.tixbit.com/api/seatmap/assets?url=bg");
     expect(result.coordinates_url).toBe("https://www.tixbit.com/api/seatmap/assets?url=coords");
     expect(result.section_names).toContain("204");

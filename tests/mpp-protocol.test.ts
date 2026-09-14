@@ -1,5 +1,6 @@
 import { Challenge, Credential, Method, Receipt, z } from "mppx";
 import { Mppx } from "mppx/client";
+import { assertMppChallenge } from "../src/safety.js";
 import { describe, expect, it, vi } from "vitest";
 
 const sandboxCharge = Method.from({
@@ -28,6 +29,25 @@ const sandboxClient = Method.toClient(sandboxCharge, {
 });
 
 describe("official mppx deterministic protocol harness", () => {
+  it.each([2499, 2500])("enforces the cap before credential creation (%i cents)", async (cap) => {
+    const method = Method.from({ name: "tempo", intent: "charge", schema: {
+      credential: { payload: z.object({ approved: z.boolean() }) },
+      request: z.object({ amount: z.string(), currency: z.string() }),
+    } });
+    const createCredential = vi.fn(async ({ challenge }: { challenge: Challenge.Challenge }) => Credential.serialize({ challenge, payload: { approved: true } }));
+    const challenge = Challenge.from({ id: "cap-fixture", realm: "mcp.tixbit.com", method: "tempo", intent: "charge", request: { amount: "25000000", currency: "0x20c0000000000000000000000000000000000000" } });
+    const rawFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(challenge) } })).mockResolvedValueOnce(Response.json({ success: true }));
+    const payments = Mppx.create({ fetch: rawFetch, methods: [Method.toClient(method, { createCredential })], polyfill: false, maxPaymentRetries: 1, onChallenge: async (received) => { assertMppChallenge(received, cap); return undefined; } });
+    if (cap < 2500) {
+      await expect(payments.fetch("https://mcp.tixbit.com/api/purchase")).rejects.toThrow();
+      expect(createCredential).not.toHaveBeenCalled();
+      expect(rawFetch).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(payments.fetch("https://mcp.tixbit.com/api/purchase")).resolves.toHaveProperty("status", 200);
+      expect(createCredential).toHaveBeenCalledTimes(1);
+      expect(rawFetch).toHaveBeenCalledTimes(2);
+    }
+  });
   it("handles 402, authorized retry, server-authoritative amount, and receipt", async () => {
     const request = {
       amount: "275.00",

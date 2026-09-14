@@ -8,11 +8,12 @@
 //   tixbit purchase <listingId> --quantity 2 --email buyer@example.com
 //   tixbit url <slug>
 //
-// Output: JSON (for piping to agents) or human-readable tables.
+// Output: JSON for both success and error results.
 // Set TIXBIT_BASE_URL to override the default (https://www.tixbit.com).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Command } from "commander";
+import { assertMppChallenge, positiveInteger, redact, usdCents } from "./safety.js";
 import { createRequire } from "node:module";
 import { normalizePurchaseTicketsParams, TixBitClient } from "./client.js";
 import type {
@@ -26,9 +27,10 @@ import type {
   PurchaseTicketsResult,
 } from "./types.js";
 
-const client = new TixBitClient({
-  baseUrl: process.env.TIXBIT_BASE_URL,
-});
+const client = (() => {
+  try { return new TixBitClient({ baseUrl: process.env.TIXBIT_BASE_URL }); }
+  catch (error) { return handleError(error); }
+})();
 const packageJson = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
@@ -36,6 +38,11 @@ const packageJson = createRequire(import.meta.url)("../package.json") as {
 // ── Output helpers ──────────────────────────────────────────────────────────
 
 function output(data: unknown, json: boolean): void {
+  data = redact(data, [process.env.TIXBIT_LINK_TOKEN ?? "", process.env.TIXBIT_ACCESS_TOKEN ?? "", process.env.MPPX_PRIVATE_KEY ?? ""]);
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    data = { success: true, ...data };
+    if ((data as { success?: boolean }).success === false) process.exitCode = 2;
+  }
   if (json) {
     process.stdout.write(JSON.stringify(data, null, 2) + "\n");
     return;
@@ -114,8 +121,8 @@ function formatItem(item: unknown): string {
 }
 
 function handleError(err: unknown): never {
-  const msg = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`Error: ${msg}\n`);
+  const msg = err instanceof TypeError || err instanceof RangeError ? err.message : "Request failed. Check input and service availability; do not retry an uncertain write.";
+  output({ success: false, error: { code: "COMMAND_FAILED", message: msg } }, true);
   process.exit(1);
 }
 
@@ -146,7 +153,7 @@ program
   .option("--end-date <date>", "Events on or before this date (ISO)")
   .option("--page <n>", "Page number", "1")
   .option("--size <n>", "Results per page", "10")
-  .option("--json", "Output raw JSON (for agents)", false)
+  .option("--json", "Output raw JSON (for agents)", true)
   .action(async (query: string | undefined, opts: {
     city?: string;
     state?: string;
@@ -222,7 +229,7 @@ program
   .option("--parking <mode>", "Parking filter: exclude, only, or include")
   .option("--location-mode <mode>", "Location mode: inferred, manual, or none")
   .option("--size <n>", "Number of results", "10")
-  .option("--json", "Output raw JSON (for agents)", false)
+  .option("--json", "Output raw JSON (for agents)", true)
   .action(async (opts: {
     city?: string;
     state?: string;
@@ -286,7 +293,7 @@ program
   .option("--sort <dir>", "Price sort: asc or desc", "asc")
   .option("--all", "Return all available listings", false)
   .option("--refresh", "Bypass the listings cache", false)
-  .option("--json", "Output raw JSON (for agents)", false)
+  .option("--json", "Output raw JSON (for agents)", true)
   .action(async (eventId: string, opts: {
     size: string;
     page: string;
@@ -321,19 +328,76 @@ program
     }
   });
 
+// ── Agent additions ─────────────────────────────────────────────────────────
+
+program.command("quote <eventId>")
+  .description("Get refreshed live listings; not a reservation or offer")
+  .option("--page <n>", "Page number", "1")
+  .option("--size <n>", "Page size (max 100)", "100")
+  .option("--json", "Output JSON", true)
+  .action(async (eventId: string, opts: { page: string; size: string }) => {
+    try {
+      output(await client.quoteListings({ eventId, page: positiveInteger(opts.page, "--page", 10000), size: positiveInteger(opts.size, "--size", 100) }), true);
+    } catch (error) { handleError(error); }
+  });
+
+program.command("auth")
+  .description("Show public browser sign-in and wallet setup; does not create a CLI session")
+  .option("--json", "Output JSON", true)
+  .action(() => output(client.getAuthorizationInfo(), true));
+
+program.command("buy <listingId>")
+  .description("Quote or confirm Stripe Link checkout (4-12 alphanumeric listing IDs only)")
+  .requiredOption("--quantity <n>", "Number of tickets (1-8)")
+  .requiredOption("--max-price <total>", "Maximum TOTAL USD charge including fees")
+  .option("--email <email>", "Buyer delivery email (or TIXBIT_EMAIL)")
+  .option("--confirm", "Approve payment; return browser handoff if wallet authorization is missing", false)
+  .option("--json", "Output JSON", true)
+  .action(async (listingId: string, opts: { quantity: string; maxPrice: string; confirm: boolean; email?: string }) => {
+    try {
+      output(await client.buyTickets({ listingId, quantity: positiveInteger(opts.quantity, "--quantity", 8), maxAmountCents: usdCents(opts.maxPrice), email: opts.email ?? process.env.TIXBIT_EMAIL ?? "", confirm: opts.confirm, sharedPaymentToken: process.env.TIXBIT_LINK_TOKEN }), true);
+    } catch (error) { handleError(error); }
+  });
+
+const sell = program.command("sell").description("Seller browser sign-in or optional authorized user integration");
+sell.command("list").option("--json", "Output JSON", true)
+  .action(async () => {
+    try { output(await client.listSellerListings(process.env.TIXBIT_ACCESS_TOKEN ?? ""), true); }
+    catch (error) { handleError(error); }
+  });
+sell.command("create").option("--confirm", "Approve listing creation and seller terms", false)
+  .option("--json", "Output JSON", true)
+  .action(async (opts: { confirm: boolean }) => {
+    try {
+      if (!opts.confirm) throw new TypeError("sell create requires --confirm and approved listing JSON on stdin");
+      if (!process.env.TIXBIT_ACCESS_TOKEN) {
+        output(await client.listSellerListings(), true);
+        return;
+      }
+      if (process.stdin.isTTY) throw new TypeError("Provide listing JSON on stdin");
+      let input = "";
+      for await (const chunk of process.stdin) {
+        input += chunk.toString();
+        if (Buffer.byteLength(input) > 65536) throw new TypeError("Listing JSON exceeds 64 KiB");
+      }
+      let body: unknown;
+      try { body = JSON.parse(input); } catch { throw new TypeError("Invalid listing JSON on stdin"); }
+      output(await client.createSellerListing(body, process.env.TIXBIT_ACCESS_TOKEN ?? "", opts.confirm), true);
+    } catch (error) { handleError(error); }
+  });
+
 // ── checkout ────────────────────────────────────────────────────────────────
 
 program
   .command("checkout <listingId>")
   .description("Get a checkout link to buy tickets for a listing")
   .requiredOption("--quantity <n>", "Number of tickets to buy")
-  .option("--json", "Output raw JSON", false)
+  .option("--json", "Output raw JSON", true)
   .action(async (listingId: string, opts: { quantity: string; json?: boolean }) => {
     try {
       const quantity = Number(opts.quantity);
       if (!Number.isInteger(quantity) || quantity < 1 || quantity > 8) {
-        process.stderr.write("Error: --quantity must be an integer from 1 to 8\n");
-        process.exit(1);
+        throw new TypeError("--quantity must be an integer from 1 to 8");
       }
 
       const isJson = opts.json === true;
@@ -390,18 +454,25 @@ program
     "Stable UUID v4 to reuse for retries and recovery",
   )
   .option("--account <name>", "mppx account name")
-  .option("--json", "Output agent-readable JSON", false)
+  .requiredOption("--max-price <total>", "Maximum total USD payment")
+  .option("--confirm", "Approve this MPP payment", false)
+  .option("--json", "Output agent-readable JSON", true)
   .action(async (listingId: string, opts: {
     quantity: string;
     email?: string;
     name?: string;
     idempotencyKey?: string;
     account?: string;
+    maxPrice: string;
+    confirm: boolean;
     json: boolean;
   }) => {
     let publicErrorCode = "INVALID_PURCHASE_REQUEST";
     let publicErrorMessage = "Invalid purchase request.";
     try {
+      if (!opts.confirm) throw new TypeError("purchase requires --confirm before loading the wallet");
+      const maxAmountCents = usdCents(opts.maxPrice);
+      if (!opts.idempotencyKey) throw new TypeError("purchase requires --idempotency-key for safe recovery");
       if (!opts.email?.trim()) {
         throw new TypeError("--email is required for machine purchases");
       }
@@ -426,6 +497,11 @@ program
       const payments = Mppx.create({
         methods: [tempo({ account })],
         polyfill: false,
+        maxPaymentRetries: 1,
+        onChallenge: async (challenge) => {
+          assertMppChallenge(challenge, maxAmountCents);
+          return undefined;
+        },
       });
       const purchaseClient = new TixBitClient({
         baseUrl: process.env.TIXBIT_BASE_URL,
@@ -477,7 +553,7 @@ program
   .command("seatmap <eventId>")
   .description("Show the seating chart / section map for an event's venue")
   .option("--section <name>", "Highlight a specific section (case-insensitive)")
-  .option("--json", "Output raw JSON (for agents)", false)
+  .option("--json", "Output raw JSON (for agents)", true)
   .action(async (eventId: string, opts: { section?: string; json: boolean }) => {
     try {
       const result = await client.getSeatmap({ eventId });
@@ -561,8 +637,9 @@ program
 program
   .command("url <slug>")
   .description("Print the TixBit event page URL for a slug or ID")
+  .option("--json", "Output JSON", true)
   .action((slug: string) => {
-    process.stdout.write(client.eventUrl(slug) + "\n");
+    output({ url: client.eventUrl(slug) }, true);
   });
 
 // ── Seatmap helpers ─────────────────────────────────────────────────────────
@@ -674,4 +751,21 @@ function describePosition(
 
 // ── Parse ───────────────────────────────────────────────────────────────────
 
-program.parse();
+function configureCommands(command: Command): void {
+  command.exitOverride();
+  command.configureOutput({
+    writeOut: (text) => output({ help: text }, true),
+    writeErr: () => {},
+  });
+  for (const child of command.commands) configureCommands(child);
+}
+configureCommands(program);
+try {
+  await program.parseAsync();
+} catch (error) {
+  const code = (error as { code?: string }).code;
+  if (code !== "commander.helpDisplayed" && code !== "commander.version") {
+    output({ success: false, error: { code: "INVALID_COMMAND", message: "Invalid command or options. Use --help." } }, true);
+    process.exitCode = 1;
+  }
+}
