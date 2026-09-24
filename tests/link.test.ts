@@ -65,6 +65,8 @@ describe("Link CLI checkout", () => {
     const { calls, dir } = setup();
     const started = await startLinkPurchase(input);
     expect(started).toMatchObject({ status: "approval_required", orderReference: reference, amountCents: 201, approvalUrl: approval });
+    expect(execMock.mock.calls[0][1]).toContain(`order_reference:${reference}`);
+    expect(execMock.mock.calls[0][1].join(" ")).toContain(`order ${reference}`);
     expect(calls).toHaveLength(1);
     const saved = readFileSync(`${dir}/tixbit/link/${reference}.json`, "utf8");
     expect(saved).not.toContain("spt_fixture123");
@@ -114,5 +116,21 @@ describe("Link CLI checkout", () => {
     setup();
     await expect(startLinkPurchase({ ...input, maxAmountCents: 200 })).rejects.toMatchObject({ code: "STRIPE_CHALLENGE_UNSAFE" });
     expect(execMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["You cannot submit duplicate spend requests within a short period of time.", "LINK_DUPLICATE_REQUEST", false],
+    ["Invalid network_id: could not retrieve merchant information.", "LINK_NETWORK_UNAVAILABLE", false],
+    ["Invalid network_id: could not retrieve merchant information.", "LINK_NETWORK_UNAVAILABLE", true],
+  ])("reports a safe Link error for %s (wrapped: %s)", async (message, code, wrapped) => {
+    setup();
+    execMock.mockImplementation((_binary: string, _args: string[], _options: unknown,
+      callback: (error: Error, stdout: string, stderr: string) => void) => {
+      const stdout = JSON.stringify(wrapped
+        ? { ok: false, error: { code: "LINK_API_ERROR", message } }
+        : [{ code: "LINK_API_ERROR", message }]);
+      callback(Object.assign(new Error("Link failed"), { stdout }), stdout, "");
+    });
+    await expect(startLinkPurchase(input)).rejects.toMatchObject({ code });
   });
 });

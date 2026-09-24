@@ -97,8 +97,32 @@ async function linkCli(args: string[]): Promise<Record<string, unknown>> {
       windowsHide: true,
     });
     stdout = typeof result === "string" ? result : (result as { stdout: string }).stdout;
-  } catch {
-    throw new LinkCheckoutError("LINK_CLI_FAILED", "Link could not complete this step. Run `npx @stripe/link-cli auth login`, then retry with the same order reference.");
+  } catch (error) {
+    const output = error && typeof error === "object" && "stdout" in error
+      ? String((error as { stdout: unknown }).stdout) : "";
+    let message = "";
+    try {
+      const parsed = JSON.parse(output) as unknown;
+      const data = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "data" in parsed
+        ? (parsed as { data: unknown }).data : parsed;
+      const item = Array.isArray(data) ? data[0] : data;
+      if (item && typeof item === "object" && "message" in item) {
+        message = String((item as { message: unknown }).message);
+      } else {
+        const nested = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "error" in parsed
+          ? (parsed as { error: unknown }).error : undefined;
+        if (nested && typeof nested === "object" && "message" in nested) {
+          message = String((nested as { message: unknown }).message);
+        }
+      }
+    } catch { /* Never print raw Link output. */ }
+    if (/duplicate spend requests|matching spend request/i.test(message)) {
+      throw new LinkCheckoutError("LINK_DUPLICATE_REQUEST", "Link blocked a matching spend request. Wait a few minutes, then start a new checkout.");
+    }
+    if (/Invalid network_id|could not retrieve merchant information/i.test(message)) {
+      throw new LinkCheckoutError("LINK_NETWORK_UNAVAILABLE", "Link could not resolve the merchant profile in this account and mode. No payment was sent.");
+    }
+    throw new LinkCheckoutError("LINK_CLI_FAILED", "Link could not complete this step. Check Link sign-in and payment methods, then retry.");
   }
   try {
     const parsed: unknown = JSON.parse(stdout);
@@ -158,11 +182,11 @@ export async function startLinkPurchase(input: {
   if (typeof body.orderReference !== "string" || !ORDER_REFERENCE.test(body.orderReference)) {
     throw new LinkCheckoutError("ORDER_REFERENCE_MISSING", "TixBit did not return an order reference.");
   }
-  const context = `Approve one TixBit ticket purchase for listing ${purchase.listingId}, quantity ${purchase.quantity}. The total charge is USD ${(amountCents / 100).toFixed(2)}. This request permits one machine payment for this selected order only.`;
+  const context = `Approve one TixBit ticket purchase for order ${body.orderReference}, listing ${purchase.listingId}, quantity ${purchase.quantity}. The total charge is USD ${(amountCents / 100).toFixed(2)}. This request permits one machine payment for this selected order only.`;
   const created = await linkCli([
     "spend-request", "create", "--credential-type", "shared_payment_token",
     "--network-id", networkId, "--amount", String(amountCents), "--currency", "usd",
-    "--context", context, "--request-approval",
+    "--context", context, "--metadata", `order_reference:${body.orderReference}`, "--request-approval",
   ]);
   if (typeof created.id !== "string" || !SPEND_REQUEST_ID.test(created.id)) {
     throw new LinkCheckoutError("LINK_SPEND_REQUEST_INVALID", "Link did not return a valid spend request.");

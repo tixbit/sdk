@@ -97,6 +97,8 @@ tixbit link complete <order-reference>
 
 The second command checks approval, sends one Stripe MPP credential, and reports whether the ticket was issued. If approval is still pending, it returns the same URL without sending payment. If the payment result is uncertain, use `link complete` with the same order reference. The CLI stores the purchase key in a private file under `~/.local/state/tixbit/link` (or `XDG_STATE_HOME`) and never prints or saves the Link payment token. Keep that file until the order is settled. Each command returns JSON; `approval_required` and payment failures use exit code 2.
 
+Each spend request includes its TixBit order reference in the approval details. Link can still rate limit a matching amount and merchant for a short time, even after a request is canceled. If Link rejects a request, the CLI reports a safe error code such as `LINK_DUPLICATE_REQUEST` or `LINK_NETWORK_UNAVAILABLE` without printing Link credentials.
+
 `--email` is always required and is never inferred from git or local account state. If a request times out or returns `pending` or `manual_review_required`, reuse the same idempotency key and follow the returned `action`; do not start another payment.
 
 ### Link agent checkout
