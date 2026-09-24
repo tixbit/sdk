@@ -8,9 +8,9 @@ No command requires a TixBit developer API key. Public discovery and links need 
 
 Run `tixbit auth` for public browser sign-in and wallet setup links. This command does not create a CLI session. Open the returned TixBit sign-in page, then complete checkout or selling in your browser. Do not copy browser cookies or bearer tokens.
 
-The public service currently has no supported browser-to-CLI seller session exchange. Website sign-in therefore does not unlock seller API calls from this CLI. Checkout discovery also does not expose the merchant identity needed for automatic Link shared-payment-token authorization. The CLI does not guess it or invent a login endpoint.
+The public service currently has no supported browser-to-CLI seller session exchange. Website sign-in therefore does not unlock seller API calls from this CLI. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
 
-For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. It does not by itself authorize this CLI to charge TixBit. Browser checkout is the normal path until automatic authorization is supported; MPP remains available with your wallet.
+For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. A Link spend request is a separate approval for a selected purchase. See [Link agent checkout](#link-agent-checkout).
 
 | Operation | Required user authorization |
 |---|---|
@@ -80,9 +80,28 @@ tixbit purchase <listing-id> \
 
 `--email` is always required and is never inferred from git or local account state. If a request times out or returns `pending` or `manual_review_required`, reuse the same idempotency key and follow the returned `action`; do not start another payment.
 
+### Link agent checkout
+
+Stripe's [Link CLI](https://github.com/stripe/link-cli) provides the spend-request and MPP payment tools. An agent host that supports local MCP servers can add it alongside TixBit:
+
+```json
+{
+  "mcpServers": {
+    "link": {
+      "command": "npx",
+      "args": ["@stripe/link-cli", "--mcp"]
+    }
+  }
+}
+```
+
+The buyer signs in with `link-cli auth login` and approves each spend request in Link. For a TixBit purchase, first POST the selected listing, quantity, buyer email, and a new UUID v4 idempotency key to `https://mcp.tixbit.com/api/purchase`. Inspect the `402` order total and Stripe challenge. Create a `shared_payment_token` spend request for that challenge's `network_id` and total in cents. After Link reports approval, use `link-cli mpp pay` with the same URL and identical POST body, including the original idempotency key. Link CLI handles the one-time credential; do not print or copy an SPT. Treat `pending` or `manual_review_required` as non-final and reconcile by the original idempotency key.
+
+This flow requires the TixBit MCP server to advertise Stripe in its `402` challenge. The published `tixbit purchase` command still selects Tempo. The `tixbit buy --confirm` command still uses the separate web checkout integration and cannot create a Link spend request. An agent host must expose Link's spend-request and MPP tools to its agent; this package cannot add tools to a third-party host such as Muse.
+
 ### Live inventory, Stripe Link, and seller commands
 
-These additions require a build of this PR or a later authorized package release. The existing registry package is still named `tixbit`; this PR does not publish it.
+These commands are in `tixbit@0.1.2`.
 
 ```sh
 # Refreshed listings, not a reservation. Fails if live freshness is unavailable.

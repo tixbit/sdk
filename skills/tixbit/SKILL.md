@@ -16,6 +16,17 @@ purchase require no TixBit API key. Machine purchase requires an mppx account
 and an email address supplied by the buyer. Never infer the email from git, OS,
 or account state.
 
+For Stripe Link MPP payments, pair this skill with Stripe's official
+`@stripe/link-cli` MCP server. Add `{"mcpServers":{"link":{"command":"npx","args":["@stripe/link-cli","--mcp"]}}}`
+to a host that supports local MCP servers. The buyer must connect their Link
+account. First inspect TixBit's `402` Stripe offer and exact order total, then
+request an approved `shared_payment_token` spend for that network ID and total.
+Use Link's `mpp pay` tool with the same purchase URL and POST body, including the
+original UUID v4 idempotency key. Keep the one-time token inside Link CLI. The
+published `tixbit purchase` command selects Tempo, and `tixbit buy --confirm`
+cannot create a Link spend request. If the host does not expose Link's spend
+request and MPP tools, use browser checkout until that host adds them.
+
 ## Commands
 
 ```bash
@@ -36,7 +47,7 @@ npx tixbit purchase <listingId> \
   --json
 ```
 
-## Additional commands (requires this build or a later release)
+## Additional commands (in `tixbit@0.1.2`)
 
 - `tixbit quote <eventId> --size 100`: refresh existing listings; requires live freshness.
 - `tixbit auth`: public browser sign-in and wallet setup links; not a CLI login. No command needs a developer API key.
