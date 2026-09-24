@@ -78,6 +78,25 @@ tixbit purchase <listing-id> \
 
 `checkout` remains link-only: it creates a `https://www.tixbit.com/checkout/process` URL for browser completion. `purchase` is the separate public MPP machine surface. It uses the official `mppx` client to answer the server's HTTP 402 challenge and currently selects the Tempo one-time charge rail configured by the server.
 
+### Stripe Link machine checkout
+
+Sign in to Link once, then start a purchase with a total price limit:
+
+TixBit 0.2.0 needs Node.js 22 or later. The included Link CLI uses your local Link sign-in; TixBit does not ask for a developer API key.
+
+```sh
+npx @stripe/link-cli auth login
+tixbit link start <listing-id> --quantity 1 --email buyer@example.com --max-price 25.00
+```
+
+`link start` returns the exact server total and an `approvalUrl`. Open that URL and approve the spend request in Link. Then use the returned order reference:
+
+```sh
+tixbit link complete <order-reference>
+```
+
+The second command checks approval, sends one Stripe MPP credential, and reports whether the ticket was issued. If approval is still pending, it returns the same URL without sending payment. If the payment result is uncertain, use `link complete` with the same order reference. The CLI stores the purchase key in a private file under `~/.local/state/tixbit/link` (or `XDG_STATE_HOME`) and never prints or saves the Link payment token. Keep that file until the order is settled. Each command returns JSON; `approval_required` and payment failures use exit code 2.
+
 `--email` is always required and is never inferred from git or local account state. If a request times out or returns `pending` or `manual_review_required`, reuse the same idempotency key and follow the returned `action`; do not start another payment.
 
 ### Live inventory, Stripe Link, and seller commands
@@ -150,6 +169,7 @@ tixbit purchase <listing-id> --quantity 2 --email buyer@example.com --confirm --
 | `listings <eventId>` | Get available ticket listings for an event |
 | `checkout <listingId>` | Get a checkout link to buy tickets |
 | `purchase <listingId>` | Buy a selected listing through MPP with explicit confirmation and total cap |
+| `link start <listingId>` / `link complete <orderReference>` | Approve and pay for a ticket with Stripe Link |
 | `quote <eventId>` | Refresh live listings, with freshness metadata |
 | `buy <listingId>` | Quote or confirm a capped Stripe Link purchase |
 | `sell list` / `sell create` | Use the existing gated seller API |
