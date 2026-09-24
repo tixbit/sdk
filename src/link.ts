@@ -19,7 +19,7 @@ const require = createRequire(import.meta.url);
 
 function linkCliEntry(): string {
   if (Number(process.versions.node.split(".")[0]) < 22) {
-    throw new LinkCheckoutError("LINK_NODE_UNSUPPORTED", "TixBit 0.2.0 needs Node.js 22 or later.");
+    throw new LinkCheckoutError("LINK_NODE_UNSUPPORTED", "TixBit needs Node.js 22 or later.");
   }
   try { return join(dirname(require.resolve("@stripe/link-cli/package.json")), "dist", "cli.js"); }
   catch { throw new LinkCheckoutError("LINK_CLI_MISSING", "The bundled Link CLI is missing. Reinstall TixBit, then retry."); }
@@ -47,6 +47,7 @@ export type LinkPurchaseOutput = {
   error?: { code: string; message: string };
   action?: string;
   order?: PurchaseTicketsResult["order"];
+  receiptUrl?: string | null;
 };
 
 export class LinkCheckoutError extends Error {
@@ -201,11 +202,51 @@ export async function startLinkPurchase(input: {
 
 export async function completeLinkPurchase(orderReference: string): Promise<LinkPurchaseOutput> {
   const state = await loadState(orderReference);
+  if (state.result && ["fulfilled", "payment_failed", "rejected"].includes(state.result.status)) return state.result;
+  if (state.paymentAttempted) {
+    // This call never has a Link payment credential. The server can return a
+    // completed purchase or continue its notification recovery by idempotency key.
+    const request = JSON.parse(state.requestBody) as {
+      listingId: string; quantity: number; email: string; name?: string; idempotencyKey: string;
+    };
+    const result = await new TixBitClient({ paymentEndpoint: paymentEndpoint(), timeoutMs: 30_000 })
+      .purchaseTickets(request);
+    if (result.orderReference && result.orderReference !== orderReference) {
+      throw new LinkCheckoutError("ORDER_REFERENCE_CHANGED", "TixBit returned a different order reference. Check the order before another payment.");
+    }
+    // Keep a known paid/manual-review outcome unless the server confirms
+    // fulfillment. A credential-free 402 or temporary pending response cannot
+    // make the paid outcome safe to retry.
+    if (state.result?.status === "manual_review_required" && result.status !== "fulfilled") {
+      return state.result;
+    }
+    const sameOrder = result.orderReference === orderReference;
+    const terminalFailure = sameOrder && (result.status === "payment_failed" || result.status === "rejected");
+    const manualReview = sameOrder && result.status === "manual_review_required";
+    const fulfilled = sameOrder && result.success && result.status === "fulfilled";
+    const output: LinkPurchaseOutput = {
+      success: fulfilled,
+      status: fulfilled || manualReview || terminalFailure
+        ? result.status : "pending",
+      orderReference,
+      amountCents: state.amountCents,
+      ...(sameOrder && result.order ? { order: result.order } : {}),
+      ...(sameOrder && result.receiptUrl ? { receiptUrl: result.receiptUrl } : {}),
+      ...(!fulfilled ? {
+        error: sameOrder && (manualReview || terminalFailure) && result.error
+          ? result.error : { code: "PURCHASE_OUTCOME_AMBIGUOUS", message: "The order is still being checked." },
+        action: terminalFailure || manualReview
+          ? result.action ?? "Contact TixBit support with this order reference. Do not submit another payment."
+          : "Run the same complete command again later. Do not start another payment or purchase.",
+      } : {}),
+    };
+    if (output.success || terminalFailure || output.status === "manual_review_required") {
+      state.result = output;
+      await saveState(state);
+    }
+    return output;
+  }
   if (state.result) return state.result;
-  if (state.paymentAttempted) return { success: false, status: "pending", orderReference,
-    amountCents: state.amountCents,
-    error: { code: "PURCHASE_OUTCOME_AMBIGUOUS", message: "Payment may have been submitted, but the result is unknown." },
-    action: "Do not retry payment or start another checkout. Contact TixBit support with this order reference." };
   const approval = await linkCli(["spend-request", "retrieve", state.spendRequestId, "--include", "shared_payment_token"]);
   if (["denied", "declined", "expired", "canceled", "cancelled"].includes(String(approval.status))) {
     return { success: false, status: "rejected", orderReference, amountCents: state.amountCents,
@@ -267,6 +308,7 @@ export async function completeLinkPurchase(orderReference: string): Promise<Link
     success: result.success, status: decline ? "payment_failed" : result.status,
     orderReference, amountCents: state.amountCents,
     ...(result.order && !decline ? { order: result.order } : {}),
+    ...(result.receiptUrl && !decline ? { receiptUrl: result.receiptUrl } : {}),
     ...(!result.success ? {
       error: decline ? { code: "CARD_DECLINED", message: "Stripe declined the card selected in Link." } : result.error,
       action: decline ? "Select another card in Link and start a new spend approval. No ticket was issued."

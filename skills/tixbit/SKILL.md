@@ -64,7 +64,7 @@ npx tixbit purchase <listingId> \
 - The older `buy` web route supports 4-12 alphanumeric IDs only. The new Link MPP command accepts the listing IDs supported by the MPP server.
 - Without a signed-in user integration, seller commands return browser sign-in guidance and do not read or submit listings. Browser-to-CLI seller sessions are not supported. Do not extract browser tokens. Optional authorized integrations may supply `TIXBIT_ACCESS_TOKEN`; seller creation still requires `--confirm`, `termsAccepted: true`, and server ownership/access checks.
 - All commands emit JSON, including errors. Preserve full case-sensitive IDs.
-- Never retry uncertain Link payment automatically. Reconcile with support and Stripe Link first. Read seller listings after uncertain creation.
+- Never resend an uncertain Link payment. Repeat `link complete` with the same order reference to check server recovery without sending a second credential. Read seller listings after uncertain creation.
 - No bids or negotiation are available. Do not claim a price reduction.
 
 ## Required workflow
