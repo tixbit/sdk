@@ -16,6 +16,7 @@ import { Command } from "commander";
 import { assertMppChallenge, positiveInteger, redact, usdCents } from "./safety.js";
 import { createRequire } from "node:module";
 import { normalizePurchaseTicketsParams, TixBitClient } from "./client.js";
+import { completeLinkPurchase, LinkCheckoutError, startLinkPurchase } from "./link.js";
 import type {
   SearchEventsParams,
   BrowseEventsParams,
@@ -442,6 +443,43 @@ program
   });
 
 // ── purchase ───────────────────────────────────────────────────────────────────────────
+
+const link = program.command("link").description("Buy tickets with a Stripe Link spend approval");
+
+link.command("start <listingId>")
+  .description("Prepare a capped purchase and return a Link approval URL")
+  .requiredOption("--quantity <n>", "Number of tickets to buy")
+  .requiredOption("--email <email>", "Buyer email for ticket delivery")
+  .requiredOption("--max-price <total>", "Maximum total USD charge")
+  .option("--name <name>", "Optional buyer name")
+  .action(async (listingId: string, opts: { quantity: string; email: string; maxPrice: string; name?: string }) => {
+    try {
+      output(await startLinkPurchase({ listingId, quantity: positiveInteger(opts.quantity, "--quantity", 8),
+        email: opts.email, name: opts.name, maxAmountCents: usdCents(opts.maxPrice) }), true);
+    } catch (error) {
+      const known = error instanceof LinkCheckoutError || error instanceof TypeError || error instanceof RangeError;
+      output({ success: false, status: "rejected", error: {
+        code: error instanceof LinkCheckoutError ? error.code : "LINK_CHECKOUT_FAILED",
+        message: known && error instanceof Error ? error.message : "Link checkout could not start. Check your connection and try again.",
+      } }, true);
+    }
+  });
+
+link.command("complete <orderReference>")
+  .description("Complete an approved Link purchase with the saved order")
+  .action(async (orderReference: string) => {
+    try { output(await completeLinkPurchase(orderReference), true); }
+    catch (error) {
+      const noPayment = error instanceof LinkCheckoutError && [
+        "INVALID_ORDER_REFERENCE", "CHECKOUT_NOT_FOUND", "INVALID_CHECKOUT_STATE",
+        "LINK_APPROVAL_MISMATCH", "CHALLENGE_CHANGED",
+      ].includes(error.code);
+      output({ success: false, status: noPayment ? "rejected" : "pending", orderReference, error: {
+        code: error instanceof LinkCheckoutError ? error.code : "LINK_CHECKOUT_FAILED",
+        message: error instanceof LinkCheckoutError ? error.message : "Payment outcome is unknown. Check this order before another payment.",
+      }, action: noPayment ? "Check the saved order and approval before another payment." : "Run the same complete command again to check this order. Do not start a new purchase yet." }, true);
+    }
+  });
 
 program
   .command("purchase <listingId>")

@@ -1,6 +1,6 @@
 {
   "name": "tixbit",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Search events, browse listings, view seatmaps, and purchase TixBit tickets through MPP",
   "type": "module",
   "main": "./dist/index.js",
@@ -30,6 +30,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@stripe/link-cli": "0.22.0",
     "commander": "^13.1.0",
     "mppx": "^0.8.15"
   },
@@ -40,7 +41,7 @@
     "vitest": "3.2.7"
   },
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "tixbit",
