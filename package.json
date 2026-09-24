@@ -1,6 +1,6 @@
 {
   "name": "tixbit",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Search events, browse listings, view seatmaps, and purchase TixBit tickets through MPP",
   "type": "module",
   "main": "./dist/index.js",
