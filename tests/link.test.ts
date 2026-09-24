@@ -16,7 +16,8 @@ const priorState = process.env.XDG_STATE_HOME;
 const priorEndpoint = process.env.TIXBIT_PAYMENT_URL;
 const dirs: string[] = [];
 
-function setup(status: "approved" | "pending_approval" | "denied" = "approved", paidStatus = 200, wrapped = false) {
+function setup(status: "approved" | "pending_approval" | "denied" = "approved", paidStatus = 200, wrapped = false,
+  recoveredStatus: "fulfilled" | "payment_failed" | "rejected" = "fulfilled") {
   const dir = mkdtempSync(`${tmpdir()}/tixbit-link-test-`);
   dirs.push(dir);
   process.env.XDG_STATE_HOME = dir;
@@ -34,6 +35,15 @@ function setup(status: "approved" | "pending_approval" | "denied" = "approved", 
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     const authorization = new Headers(init?.headers).get("authorization");
     calls.push({ body, authorization });
+    if (!authorization && paidStatus === 502 && calls.length > 3) {
+      if (recoveredStatus !== "fulfilled") {
+        return Response.json({ success: false, status: recoveredStatus, orderReference: reference }, { status: 409 });
+      }
+      return Response.json({ success: true, status: "fulfilled", orderReference: reference,
+        receiptUrl: "https://www.tixbit.com/orders/2356ec4d-1fe4-4fd7-99f9-3cc315d55511",
+        order: { reference, status: "fulfilled", listingId: "AbCd12", quantity: 1,
+          pricePerTicket: 2.01, subtotal: 2.01, fees: 0, total: 2.01, currency: "USD" } });
+    }
     const challenge = Challenge.from({ id: "stripe-challenge-fixture", realm: "mcp.tixbit.test",
       method: "stripe", intent: "charge", request: {
         amount: "201", currency: "usd", externalId: reference,
@@ -45,6 +55,8 @@ function setup(status: "approved" | "pending_approval" | "denied" = "approved", 
     if (paidStatus === 402) return Response.json({ status: "payment_required", orderReference: reference,
       detail: "Payment verification failed: Stripe PaymentIntent failed: Your card was declined.." },
       { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(challenge) } });
+    if (paidStatus === 501) return Response.json({ success: false, status: "manual_review_required",
+      orderReference: reference }, { status: 502 });
     if (paidStatus === 502) return Response.json({ status: 502 }, { status: 502 });
     return Response.json({ success: true, status: "fulfilled", orderReference: reference, receiptUrl: null,
       order: { reference, status: "fulfilled", listingId: "AbCd12", quantity: 1,
@@ -120,8 +132,52 @@ describe("Link CLI checkout", () => {
     expect(result).toMatchObject({ success: false, status: "pending",
       error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
       action: expect.stringContaining("Do not retry") });
-    expect(await completeLinkPurchase(reference)).toEqual(result);
-    expect(calls).toHaveLength(3);
+    const recovered = await completeLinkPurchase(reference);
+    expect(recovered).toMatchObject({ success: true, status: "fulfilled",
+      receiptUrl: "https://www.tixbit.com/orders/2356ec4d-1fe4-4fd7-99f9-3cc315d55511" });
+    expect(calls).toHaveLength(4);
+    expect(calls[3].authorization).toBeNull();
+  });
+
+  it.each(["payment_failed", "rejected"] as const)("preserves a terminal %s recovery result", async status => {
+    const { calls } = setup("approved", 502, false, status);
+    await startLinkPurchase(input);
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    const recovered = await completeLinkPurchase(reference);
+    expect(recovered).toMatchObject({ success: false, status });
+    expect(await completeLinkPurchase(reference)).toEqual(recovered);
+    expect(calls).toHaveLength(4);
+    expect(calls[3].authorization).toBeNull();
+  });
+
+  it("does not downgrade a known paid manual-review result during a later status check", async () => {
+    const { calls } = setup("approved", 501);
+    await startLinkPurchase(input);
+    const first = await completeLinkPurchase(reference);
+    expect(first.status).toBe("manual_review_required");
+    expect(await completeLinkPurchase(reference)).toEqual(first);
+    expect(calls).toHaveLength(4);
+    expect(calls[3].authorization).toBeNull();
+  });
+
+  it("rejects a recovery response for a different order", async () => {
+    setup("approved", 502);
+    await startLinkPurchase(input);
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    globalThis.fetch = vi.fn(async () => Response.json({ success: true, status: "fulfilled",
+      orderReference: "TBM-B23456789C" })) as typeof fetch;
+    await expect(completeLinkPurchase(reference)).rejects.toMatchObject({ code: "ORDER_REFERENCE_CHANGED" });
+  });
+
+  it("keeps an unbound recovery rejection pending", async () => {
+    setup("approved", 502);
+    await startLinkPurchase(input);
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    const recoveryFetch = vi.fn(async () => Response.json({ success: false, status: "rejected" }, { status: 409 }));
+    globalThis.fetch = recoveryFetch as typeof fetch;
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    expect(recoveryFetch).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an amount over the buyer's cap before creating a spend request", async () => {
