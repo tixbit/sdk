@@ -408,6 +408,14 @@ Returns the full URL to the event page on `www.tixbit.com`.
 
 Node.js 20 is end-of-life and remains in CI only as a compatibility floor. Node.js 22 and 24 are LTS releases; Node.js 26 is the current release line.
 
+## ChatGPT and Codex plugin
+
+The [TixBit plugin](plugins/tixbit/README.md) packages ticket-discovery and SDK
+integration skills for the OpenAI Plugins Directory. See the
+[submission materials](docs/plugin-submission.md) for packaging, reviewer cases,
+and current release prerequisites. The package is prepared for review, not yet
+published in the directory.
+
 ## License
 
 [MIT](LICENSE)
