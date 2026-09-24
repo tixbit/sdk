@@ -489,6 +489,22 @@ export class TixBitClient {
       const orderReference = normalizeOrderReference(body.orderReference);
       const receiptUrl = normalizeReceiptUrl(body.receiptUrl);
 
+      if (response.status >= 500 && body.status !== "manual_review_required") {
+        return {
+          success: false,
+          status: "pending",
+          idempotencyKey,
+          orderReference,
+          receiptUrl,
+          error: {
+            code: "PURCHASE_OUTCOME_AMBIGUOUS",
+            message: "The server failed to confirm the purchase outcome.",
+          },
+          action:
+            "Check the order with the same idempotency key. Do not create a new payment or purchase attempt.",
+        };
+      }
+
       if (response.status === 402) {
         const order = normalizePurchaseOrder(
           body.order,

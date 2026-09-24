@@ -449,7 +449,7 @@ describe("TixBitClient", () => {
     ).not.toThrow();
   });
 
-  it("redacts unknown response fields and rejects failed fulfilled responses", async () => {
+  it("redacts unknown response fields and treats server failures as ambiguous", async () => {
     const paymentFetch = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -484,7 +484,12 @@ describe("TixBitClient", () => {
       email: "fan@example.com",
       idempotencyKey: "44444444-4444-4444-8444-444444444444",
     });
-    expect(failed).toMatchObject({ success: false, status: "rejected" });
+    expect(failed).toMatchObject({
+      success: false,
+      status: "pending",
+      error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
+      action: expect.stringContaining("Do not create a new payment"),
+    });
     expect(failed).not.toHaveProperty("providerPurchaseId");
     expect(failed).not.toHaveProperty("internalDebug");
 
@@ -501,6 +506,24 @@ describe("TixBitClient", () => {
     });
     expect(fulfilled).not.toHaveProperty("providerPurchaseId");
     expect(fulfilled).not.toHaveProperty("internalDebug");
+  });
+
+  it("preserves a paid manual review result on HTTP 502", async () => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValue(
+      jsonResponse({ status: "manual_review_required", orderReference: "TBM-E23456789F" }, 502),
+    );
+    const client = new TixBitClient({ paymentFetch });
+
+    await expect(client.purchaseTickets({
+      listingId: "LISTING123",
+      quantity: 1,
+      email: "fan@example.com",
+      idempotencyKey: "88888888-8888-4888-8888-888888888888",
+    })).resolves.toMatchObject({
+      status: "manual_review_required",
+      paid: true,
+      orderReference: "TBM-E23456789F",
+    });
   });
 
   it("keeps fulfilled responses without an order reference pending", async () => {

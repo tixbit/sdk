@@ -45,6 +45,7 @@ function setup(status: "approved" | "pending_approval" | "denied" = "approved", 
     if (paidStatus === 402) return Response.json({ status: "payment_required", orderReference: reference,
       detail: "Payment verification failed: Stripe PaymentIntent failed: Your card was declined.." },
       { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(challenge) } });
+    if (paidStatus === 502) return Response.json({ status: 502 }, { status: 502 });
     return Response.json({ success: true, status: "fulfilled", orderReference: reference, receiptUrl: null,
       order: { reference, status: "fulfilled", listingId: "AbCd12", quantity: 1,
         pricePerTicket: 2.01, subtotal: 2.01, fees: 0, total: 2.01, currency: "USD" } });
@@ -109,6 +110,17 @@ describe("Link CLI checkout", () => {
     await startLinkPurchase(input);
     const result = await completeLinkPurchase(reference);
     expect(result).toMatchObject({ success: false, status: "payment_failed", error: { code: "CARD_DECLINED" } });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("does not submit payment again after an ambiguous server error", async () => {
+    const { calls } = setup("approved", 502);
+    await startLinkPurchase(input);
+    const result = await completeLinkPurchase(reference);
+    expect(result).toMatchObject({ success: false, status: "pending",
+      error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
+      action: expect.stringContaining("Do not retry") });
+    expect(await completeLinkPurchase(reference)).toEqual(result);
     expect(calls).toHaveLength(3);
   });
 
