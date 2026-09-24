@@ -34,6 +34,7 @@ type LinkState = {
   amountCents: number;
   networkId: string;
   externalId: string;
+  paymentAttempted?: boolean;
   result?: LinkPurchaseOutput;
 };
 
@@ -200,7 +201,11 @@ export async function startLinkPurchase(input: {
 
 export async function completeLinkPurchase(orderReference: string): Promise<LinkPurchaseOutput> {
   const state = await loadState(orderReference);
-  if (state.result?.status === "fulfilled" || state.result?.status === "manual_review_required") return state.result;
+  if (state.result) return state.result;
+  if (state.paymentAttempted) return { success: false, status: "pending", orderReference,
+    amountCents: state.amountCents,
+    error: { code: "PURCHASE_OUTCOME_AMBIGUOUS", message: "Payment may have been submitted, but the result is unknown." },
+    action: "Do not retry payment or start another checkout. Contact TixBit support with this order reference." };
   const approval = await linkCli(["spend-request", "retrieve", state.spendRequestId, "--include", "shared_payment_token"]);
   if (["denied", "declined", "expired", "canceled", "cancelled"].includes(String(approval.status))) {
     return { success: false, status: "rejected", orderReference, amountCents: state.amountCents,
@@ -240,6 +245,8 @@ export async function completeLinkPurchase(orderReference: string): Promise<Link
     },
   });
   let decline = false;
+  state.paymentAttempted = true;
+  await saveState(state);
   const client = new TixBitClient({ paymentEndpoint: paymentEndpoint(), timeoutMs: 90_000,
     paymentFetch: async (url, init) => {
       const response = await payments.fetch(url, { ...init, headers: { ...init?.headers, "accept-payment": "stripe/charge" } });
@@ -262,12 +269,12 @@ export async function completeLinkPurchase(orderReference: string): Promise<Link
     ...(result.order && !decline ? { order: result.order } : {}),
     ...(!result.success ? {
       error: decline ? { code: "CARD_DECLINED", message: "Stripe declined the card selected in Link." } : result.error,
-      action: decline ? "Select another card in Link and start a new spend approval. No ticket was issued." : result.action,
+      action: decline ? "Select another card in Link and start a new spend approval. No ticket was issued."
+        : result.status === "pending" ? "Payment may have succeeded. Do not retry or start another checkout. Contact TixBit support with this order reference."
+        : result.action,
     } : {}),
   };
-  if (output.status === "fulfilled" || output.status === "manual_review_required") {
-    state.result = output;
-    await saveState(state);
-  }
+  state.result = output;
+  await saveState(state);
   return output;
 }
