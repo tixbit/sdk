@@ -578,6 +578,38 @@ describe("TixBitClient", () => {
     });
   });
 
+  it.each([
+    { label: "malformed JSON", response: () => new Response('{"success":', { status: 200 }) },
+    { label: "empty 200", response: () => new Response("", { status: 200 }) },
+    { label: "empty 204", response: () => new Response(null, { status: 204 }) },
+    { label: "null JSON", response: () => jsonResponse(null) },
+    { label: "array JSON", response: () => jsonResponse([]) },
+    { label: "unexpected status", response: () => jsonResponse({ success: true, status: "accepted" }, 202) },
+    { label: "unconfirmed fulfillment", response: () => jsonResponse({ status: "fulfilled", orderReference: "TBM-A23456789B" }) },
+  ])("keeps $label successful purchase responses pending with the original key", async ({ response }) => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(response());
+    const idempotencyKey = "11111111-1111-4111-8111-111111111111";
+    const result = await new TixBitClient({ paymentFetch }).purchaseTickets({
+      listingId: "LISTING123", quantity: 1, email: "fan@example.com", idempotencyKey,
+    });
+    expect(result).toMatchObject({ success: false, status: "pending", idempotencyKey,
+      error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" }, action: expect.stringContaining("Do not create a new payment") });
+    expect(paymentFetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(paymentFetch.mock.calls[0]?.[1]?.body)).idempotencyKey).toBe(idempotencyKey);
+  });
+
+  it.each([400, 409])("preserves explicit order-bound rejection on HTTP %i", async status => {
+    const paymentFetch = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({
+      success: false, status: "rejected", orderReference: "TBM-A23456789B",
+    }, status));
+    await expect(new TixBitClient({ paymentFetch }).purchaseTickets({
+      listingId: "LISTING123", quantity: 1, email: "fan@example.com",
+      idempotencyKey: "11111111-1111-4111-8111-111111111111",
+    })).resolves.toMatchObject({ success: false, status: "rejected", orderReference: "TBM-A23456789B",
+      error: { code: "PURCHASE_REJECTED" } });
+    expect(paymentFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns pending on a timeout or network ambiguity and preserves the retry key", async () => {
     const paymentFetch = vi.fn<typeof fetch>().mockRejectedValue(new Error("timeout"));
     const client = new TixBitClient({

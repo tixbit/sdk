@@ -200,9 +200,38 @@ export async function startLinkPurchase(input: {
     amountCents, approvalUrl: url, action: `Approve in Link, then run: tixbit link complete ${body.orderReference}` };
 }
 
+function purchaseOutcome(state: LinkState, result: PurchaseTicketsResult): LinkPurchaseOutput {
+  if (result.orderReference && result.orderReference !== state.orderReference) {
+    throw new LinkCheckoutError("ORDER_REFERENCE_CHANGED", "TixBit returned a different order reference. Check the order before another payment.");
+  }
+  const sameOrder = result.orderReference === state.orderReference;
+  const terminalFailure = sameOrder && (result.status === "payment_failed" || result.status === "rejected");
+  const manualReview = sameOrder && result.status === "manual_review_required";
+  const fulfilled = sameOrder && result.success && result.status === "fulfilled";
+  return {
+    success: fulfilled,
+    status: fulfilled || manualReview || terminalFailure ? result.status : "pending",
+    orderReference: state.orderReference,
+    amountCents: state.amountCents,
+    ...(sameOrder && result.order ? { order: result.order } : {}),
+    ...(sameOrder && result.receiptUrl ? { receiptUrl: result.receiptUrl } : {}),
+    ...(!fulfilled ? {
+      error: sameOrder && (manualReview || terminalFailure) && result.error
+        ? result.error : { code: "PURCHASE_OUTCOME_AMBIGUOUS", message: "The order is still being checked." },
+      action: terminalFailure || manualReview
+        ? result.action ?? "Contact TixBit support with this order reference. Do not submit another payment."
+        : "Run the same complete command again later. Do not start another payment or purchase.",
+    } : {}),
+  };
+}
+
 export async function completeLinkPurchase(orderReference: string): Promise<LinkPurchaseOutput> {
   const state = await loadState(orderReference);
-  if (state.result && ["fulfilled", "payment_failed", "rejected"].includes(state.result.status)) return state.result;
+  // Older versions cached invalid successful responses as rejected/HTTP_2xx.
+  // Keep the attempted-payment flag and only reopen credential-free recovery.
+  const ambiguousLegacyResult = state.paymentAttempted && state.result?.status === "rejected" &&
+    /^HTTP_2\d\d$/.test(state.result.error?.code ?? "");
+  if (state.result && !ambiguousLegacyResult && ["fulfilled", "payment_failed", "rejected"].includes(state.result.status)) return state.result;
   if (state.paymentAttempted) {
     // This call never has a Link payment credential. The server can return a
     // completed purchase or continue its notification recovery by idempotency key.
@@ -211,36 +240,14 @@ export async function completeLinkPurchase(orderReference: string): Promise<Link
     };
     const result = await new TixBitClient({ paymentEndpoint: paymentEndpoint(), timeoutMs: 30_000 })
       .purchaseTickets(request);
-    if (result.orderReference && result.orderReference !== orderReference) {
-      throw new LinkCheckoutError("ORDER_REFERENCE_CHANGED", "TixBit returned a different order reference. Check the order before another payment.");
-    }
+    const output = purchaseOutcome(state, result);
     // Keep a known paid/manual-review outcome unless the server confirms
     // fulfillment. A credential-free 402 or temporary pending response cannot
     // make the paid outcome safe to retry.
-    if (state.result?.status === "manual_review_required" && result.status !== "fulfilled") {
+    if (state.result?.status === "manual_review_required" && !output.success) {
       return state.result;
     }
-    const sameOrder = result.orderReference === orderReference;
-    const terminalFailure = sameOrder && (result.status === "payment_failed" || result.status === "rejected");
-    const manualReview = sameOrder && result.status === "manual_review_required";
-    const fulfilled = sameOrder && result.success && result.status === "fulfilled";
-    const output: LinkPurchaseOutput = {
-      success: fulfilled,
-      status: fulfilled || manualReview || terminalFailure
-        ? result.status : "pending",
-      orderReference,
-      amountCents: state.amountCents,
-      ...(sameOrder && result.order ? { order: result.order } : {}),
-      ...(sameOrder && result.receiptUrl ? { receiptUrl: result.receiptUrl } : {}),
-      ...(!fulfilled ? {
-        error: sameOrder && (manualReview || terminalFailure) && result.error
-          ? result.error : { code: "PURCHASE_OUTCOME_AMBIGUOUS", message: "The order is still being checked." },
-        action: terminalFailure || manualReview
-          ? result.action ?? "Contact TixBit support with this order reference. Do not submit another payment."
-          : "Run the same complete command again later. Do not start another payment or purchase.",
-      } : {}),
-    };
-    if (output.success || terminalFailure || output.status === "manual_review_required") {
+    if (ambiguousLegacyResult || output.success || ["payment_failed", "rejected", "manual_review_required"].includes(output.status)) {
       state.result = output;
       await saveState(state);
     }
@@ -301,21 +308,12 @@ export async function completeLinkPurchase(orderReference: string): Promise<Link
   const request = JSON.parse(state.requestBody) as { listingId: string; quantity: number; email: string; name?: string; idempotencyKey: string };
   const result = await client.purchaseTickets(request);
   if (challengeChanged) throw new LinkCheckoutError("CHALLENGE_CHANGED", "The order or payment amount changed. No payment was submitted.");
-  if (result.orderReference && result.orderReference !== orderReference) {
-    throw new LinkCheckoutError("ORDER_REFERENCE_CHANGED", "TixBit returned a different order reference. Check the order before another payment.");
-  }
-  const output: LinkPurchaseOutput = {
-    success: result.success, status: decline ? "payment_failed" : result.status,
-    orderReference, amountCents: state.amountCents,
-    ...(result.order && !decline ? { order: result.order } : {}),
-    ...(result.receiptUrl && !decline ? { receiptUrl: result.receiptUrl } : {}),
-    ...(!result.success ? {
-      error: decline ? { code: "CARD_DECLINED", message: "Stripe declined the card selected in Link." } : result.error,
-      action: decline ? "Select another card in Link and start a new spend approval. No ticket was issued."
-        : result.status === "pending" ? "Payment may have succeeded. Do not retry or start another checkout. Contact TixBit support with this order reference."
-        : result.action,
-    } : {}),
-  };
+  const outcome = purchaseOutcome(state, result);
+  const output: LinkPurchaseOutput = decline ? {
+    success: false, status: "payment_failed", orderReference, amountCents: state.amountCents,
+    error: { code: "CARD_DECLINED", message: "Stripe declined the card selected in Link." },
+    action: "Select another card in Link and start a new spend approval. No ticket was issued.",
+  } : outcome;
   state.result = output;
   await saveState(state);
   return output;

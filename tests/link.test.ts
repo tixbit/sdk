@@ -1,6 +1,6 @@
 import { Challenge, Credential } from "mppx";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const execMock = vi.hoisted(() => vi.fn());
@@ -17,7 +17,7 @@ const priorEndpoint = process.env.TIXBIT_PAYMENT_URL;
 const dirs: string[] = [];
 
 function setup(status: "approved" | "pending_approval" | "denied" = "approved", paidStatus = 200, wrapped = false,
-  recoveredStatus: "fulfilled" | "payment_failed" | "rejected" = "fulfilled") {
+  recoveredStatus: "fulfilled" | "payment_failed" | "rejected" = "fulfilled", paidResponse?: () => Response) {
   const dir = mkdtempSync(`${tmpdir()}/tixbit-link-test-`);
   dirs.push(dir);
   process.env.XDG_STATE_HOME = dir;
@@ -35,7 +35,7 @@ function setup(status: "approved" | "pending_approval" | "denied" = "approved", 
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     const authorization = new Headers(init?.headers).get("authorization");
     calls.push({ body, authorization });
-    if (!authorization && paidStatus === 502 && calls.length > 3) {
+    if (!authorization && (paidStatus === 502 || paidResponse) && calls.length > 3) {
       if (recoveredStatus !== "fulfilled") {
         return Response.json({ success: false, status: recoveredStatus, orderReference: reference }, { status: 409 });
       }
@@ -52,6 +52,7 @@ function setup(status: "approved" | "pending_approval" | "denied" = "approved", 
     });
     if (!authorization) return Response.json({ status: "payment_required", orderReference: reference },
       { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(challenge) } });
+    if (paidResponse) return paidResponse();
     if (paidStatus === 402) return Response.json({ status: "payment_required", orderReference: reference,
       detail: "Payment verification failed: Stripe PaymentIntent failed: Your card was declined.." },
       { status: 402, headers: { "WWW-Authenticate": Challenge.serialize(challenge) } });
@@ -122,6 +123,7 @@ describe("Link CLI checkout", () => {
     await startLinkPurchase(input);
     const result = await completeLinkPurchase(reference);
     expect(result).toMatchObject({ success: false, status: "payment_failed", error: { code: "CARD_DECLINED" } });
+    expect(await completeLinkPurchase(reference)).toEqual(result);
     expect(calls).toHaveLength(3);
   });
 
@@ -131,11 +133,132 @@ describe("Link CLI checkout", () => {
     const result = await completeLinkPurchase(reference);
     expect(result).toMatchObject({ success: false, status: "pending",
       error: { code: "PURCHASE_OUTCOME_AMBIGUOUS" },
-      action: expect.stringContaining("Do not retry") });
+      action: expect.stringContaining("Do not start another payment") });
     const recovered = await completeLinkPurchase(reference);
     expect(recovered).toMatchObject({ success: true, status: "fulfilled",
       receiptUrl: "https://www.tixbit.com/orders/2356ec4d-1fe4-4fd7-99f9-3cc315d55511" });
     expect(calls).toHaveLength(4);
+    expect(calls[3].authorization).toBeNull();
+  });
+
+  it.each([
+    { label: "malformed 200", response: () => new Response('{"success":', { status: 200 }) },
+    { label: "empty 200", response: () => new Response("", { status: 200 }) },
+    { label: "empty 204", response: () => new Response(null, { status: 204 }) },
+    { label: "unexpected 202", response: () => Response.json({ success: true, status: "accepted", orderReference: reference }, { status: 202 }) },
+    { label: "unconfirmed fulfillment", response: () => Response.json({ status: "fulfilled", orderReference: reference }) },
+    { label: "unbound rejection", response: () => Response.json({ success: false, status: "rejected" }, { status: 409 }) },
+    { label: "unbound payment failure", response: () => Response.json({ success: false, status: "payment_failed" }, { status: 409 }) },
+  ])("recovers $label through the original body without another credential", async ({ response }) => {
+    const { calls, dir } = setup("approved", 200, false, "fulfilled", response);
+    await startLinkPurchase(input);
+    const result = await completeLinkPurchase(reference);
+    expect(result).toMatchObject({ success: false, status: "pending", orderReference: reference,
+      action: expect.stringContaining("Run the same complete command") });
+    const saved = JSON.parse(readFileSync(`${dir}/tixbit/link/${reference}.json`, "utf8"));
+    expect(saved.paymentAttempted).toBe(true);
+    expect(saved.result.status).toBe("pending");
+    const recovered = await completeLinkPurchase(reference);
+    expect(recovered).toMatchObject({ success: true, status: "fulfilled", orderReference: reference });
+    expect(await completeLinkPurchase(reference)).toEqual(recovered);
+    expect(calls).toHaveLength(4);
+    expect(calls.filter(call => call.authorization)).toHaveLength(1);
+    expect(calls[3].authorization).toBeNull();
+    for (const call of calls) expect(call.body).toEqual(calls[0].body);
+    expect(calls[3].body.idempotencyKey).toBe(calls[2].body.idempotencyKey);
+    expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["payment_failed", "rejected"] as const)("caches an initial order-bound 4xx %s without another payment", async status => {
+    const { calls } = setup("approved", 200, false, "fulfilled", () => Response.json({
+      success: false, status, orderReference: reference,
+    }, { status: 409 }));
+    await startLinkPurchase(input);
+    const result = await completeLinkPurchase(reference);
+    expect(result).toMatchObject({ success: false, status, orderReference: reference });
+    expect(await completeLinkPurchase(reference)).toEqual(result);
+    expect(calls).toHaveLength(3);
+    expect(calls.filter(call => call.authorization)).toHaveLength(1);
+  });
+
+  it.each(["HTTP_200", "HTTP_204"])("reconciles a previously cached %s rejection without retrieving or sending a credential", async code => {
+    const { calls, dir } = setup("approved", 502);
+    await startLinkPurchase(input);
+    const path = `${dir}/tixbit/link/${reference}.json`;
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    saved.paymentAttempted = true;
+    saved.result = { success: false, status: "rejected", orderReference: reference,
+      amountCents: 201, error: { code, message: "Purchase request was rejected or returned an invalid response." } };
+    writeFileSync(path, JSON.stringify(saved));
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls.push({ body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ success: true, status: "fulfilled", orderReference: reference });
+    }) as typeof fetch;
+    const result = await completeLinkPurchase(reference);
+    expect(result).toMatchObject({ success: true, status: "fulfilled", orderReference: reference });
+    expect(await completeLinkPurchase(reference)).toEqual(result);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].authorization).toBeNull();
+    expect(calls[1].body).toEqual(JSON.parse(saved.requestBody));
+    expect(execMock).toHaveBeenCalledTimes(1);
+    const recovered = JSON.parse(readFileSync(path, "utf8"));
+    expect(recovered.paymentAttempted).toBe(true);
+    expect(recovered.result.status).toBe("fulfilled");
+  });
+
+  it("keeps legacy successful-response rejection recovery credential-free while still pending", async () => {
+    const { calls, dir } = setup();
+    await startLinkPurchase(input);
+    const path = `${dir}/tixbit/link/${reference}.json`;
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    saved.paymentAttempted = true;
+    saved.result = { success: false, status: "rejected", orderReference: reference,
+      amountCents: 201, error: { code: "HTTP_200", message: "Invalid response" } };
+    writeFileSync(path, JSON.stringify(saved));
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls.push({ body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") });
+      return calls.length === 2
+        ? Response.json({ status: "payment_required", orderReference: reference }, { status: 402 })
+        : Response.json({ success: true, status: "fulfilled", orderReference: reference });
+    }) as typeof fetch;
+    expect((await completeLinkPurchase(reference)).status).toBe("pending");
+    const pending = JSON.parse(readFileSync(path, "utf8"));
+    expect(pending.result.status).toBe("pending");
+    expect(pending.paymentAttempted).toBe(true);
+    expect((await completeLinkPurchase(reference)).status).toBe("fulfilled");
+    expect(calls).toHaveLength(3);
+    for (const call of calls) {
+      expect(call.authorization).toBeNull();
+      expect(call.body).toEqual(JSON.parse(saved.requestBody));
+    }
+    expect(execMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reopen a previously cached 4xx rejection", async () => {
+    const { calls, dir } = setup();
+    await startLinkPurchase(input);
+    const path = `${dir}/tixbit/link/${reference}.json`;
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    saved.paymentAttempted = true;
+    saved.result = { success: false, status: "rejected", orderReference: reference,
+      amountCents: 201, error: { code: "HTTP_409", message: "Rejected" } };
+    writeFileSync(path, JSON.stringify(saved));
+    expect(await completeLinkPurchase(reference)).toEqual(saved.result);
+    expect(calls).toHaveLength(1);
+    expect(execMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an initial response for another order without caching it as terminal", async () => {
+    const { calls, dir } = setup("approved", 200, false, "fulfilled", () => Response.json({
+      success: false, status: "rejected", orderReference: "TBM-B23456789C",
+    }, { status: 409 }));
+    await startLinkPurchase(input);
+    await expect(completeLinkPurchase(reference)).rejects.toMatchObject({ code: "ORDER_REFERENCE_CHANGED" });
+    const saved = JSON.parse(readFileSync(`${dir}/tixbit/link/${reference}.json`, "utf8"));
+    expect(saved.paymentAttempted).toBe(true);
+    expect(saved.result).toBeUndefined();
+    expect((await completeLinkPurchase(reference)).status).toBe("fulfilled");
+    expect(calls.filter(call => call.authorization)).toHaveLength(1);
     expect(calls[3].authorization).toBeNull();
   });
 
@@ -158,6 +281,32 @@ describe("Link CLI checkout", () => {
     expect(await completeLinkPurchase(reference)).toEqual(first);
     expect(calls).toHaveLength(4);
     expect(calls[3].authorization).toBeNull();
+  });
+
+  it("keeps known paid manual review until fulfillment is confirmed for the same order", async () => {
+    const { calls, dir } = setup("approved", 501);
+    await startLinkPurchase(input);
+    const manualReview = await completeLinkPurchase(reference);
+    expect(manualReview.status).toBe("manual_review_required");
+    let recovered = false;
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls.push({ body: JSON.parse(String(init?.body)), authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ success: true, status: "fulfilled", ...(recovered ? { orderReference: reference } : {}) });
+    }) as typeof fetch;
+    expect(await completeLinkPurchase(reference)).toEqual(manualReview);
+    const path = `${dir}/tixbit/link/${reference}.json`;
+    expect(JSON.parse(readFileSync(path, "utf8")).result.status).toBe("manual_review_required");
+    recovered = true;
+    const fulfilled = await completeLinkPurchase(reference);
+    expect(fulfilled).toMatchObject({ success: true, status: "fulfilled", orderReference: reference });
+    expect(JSON.parse(readFileSync(path, "utf8")).result.status).toBe("fulfilled");
+    expect(await completeLinkPurchase(reference)).toEqual(fulfilled);
+    expect(calls).toHaveLength(5);
+    expect(calls.filter(call => call.authorization)).toHaveLength(1);
+    for (const call of calls.slice(3)) {
+      expect(call.authorization).toBeNull();
+      expect(call.body).toEqual(calls[0].body);
+    }
   });
 
   it("rejects a recovery response for a different order", async () => {
