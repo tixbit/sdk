@@ -483,9 +483,9 @@ export class TixBitClient {
         }),
         signal: controller.signal,
       });
-      const body = (await response.json().catch(() => ({}))) as Partial<
-        PurchaseTicketsResult
-      >;
+      const value: unknown = await response.json().catch(() => undefined);
+      const body = (value && typeof value === "object" && !Array.isArray(value)
+        ? value : {}) as Partial<PurchaseTicketsResult>;
       const orderReference = normalizeOrderReference(body.orderReference);
       const receiptUrl = normalizeReceiptUrl(body.receiptUrl);
 
@@ -523,27 +523,28 @@ export class TixBitClient {
         };
       }
 
+      // A successful HTTP response with an unusable outcome can follow a paid
+      // request. Reconcile the original order rather than declaring rejection.
+      if (response.ok && (
+        !isPurchaseStatus(body.status) ||
+        (body.status === "fulfilled" && (body.success !== true || !orderReference))
+      )) {
+        return {
+          success: false,
+          status: "pending",
+          idempotencyKey,
+          orderReference,
+          receiptUrl,
+          error: {
+            code: "PURCHASE_OUTCOME_AMBIGUOUS",
+            message: "The server did not return a confirmed purchase outcome.",
+          },
+          action:
+            "Check the order with the same idempotency key. Do not create a new payment or purchase attempt.",
+        };
+      }
+
       if (isPurchaseStatus(body.status)) {
-        if (
-          body.status === "fulfilled" &&
-          response.ok &&
-          body.success === true &&
-          !orderReference
-        ) {
-          return {
-            success: false,
-            status: "pending",
-            idempotencyKey,
-            orderReference: null,
-            receiptUrl,
-            error: {
-              code: "PURCHASE_OUTCOME_AMBIGUOUS",
-              message: "The purchase response did not include an order reference.",
-            },
-            action:
-              "Retry with the same idempotency key. Do not create a new payment or purchase attempt.",
-          };
-        }
         if (body.status === "fulfilled" && (!response.ok || body.success !== true)) {
           return rejectedPurchaseResult(
             idempotencyKey,
