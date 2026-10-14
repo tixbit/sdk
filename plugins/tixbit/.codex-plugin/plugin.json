@@ -1,0 +1,39 @@
+{
+  "name": "tixbit",
+  "version": "0.1.0",
+  "description": "Find event tickets and integrate the public TixBit SDK.",
+  "author": {
+    "name": "TixBit",
+    "url": "https://www.tixbit.com"
+  },
+  "homepage": "https://www.tixbit.com/agents",
+  "repository": "https://github.com/tixbit/sdk",
+  "license": "MIT",
+  "keywords": [
+    "tickets",
+    "events",
+    "concerts",
+    "sports",
+    "sdk"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "TixBit",
+    "shortDescription": "Find event tickets and build with the TixBit SDK.",
+    "longDescription": "Search live events, compare ticket listings, inspect venue sections, and open TixBit checkout. Build event discovery into Node.js applications with the public TixBit SDK. Requires Node.js and network access. Payment is completed by the user on TixBit.",
+    "developerName": "TixBit",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://www.tixbit.com",
+    "privacyPolicyURL": "https://www.tixbit.com/privacy",
+    "termsOfServiceURL": "https://www.tixbit.com/terms",
+    "defaultPrompt": [
+      "Find Braves tickets in Atlanta for two people.",
+      "Help me compare sections for an event.",
+      "Add TixBit event search to my Node.js app."
+    ],
+    "logo": "./assets/logo.png"
+  }
+}
