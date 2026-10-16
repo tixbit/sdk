@@ -191,6 +191,13 @@ files under `~/.config/tixbit/seller`; never print or paste those files into cha
 The OAuth callback is `https://mcp.tixbit.com/cli/callback`, with resource
 `https://mcp.tixbit.com/api/mcp`. Localhost production redirects are not used.
 
+Operators can provision the public CLI client before account infrastructure is
+enabled using the [explicit offline procedure](https://github.com/tixbit/tixbit-monorepo/blob/main/docs/runbooks/mcp-cli-provisioning.md).
+The fixed-profile command uses the existing signing key, creates no access
+grant, and never changes either client allowlist or production settings. Reuse
+an existing approved matching client when available; provisioning is a separate
+operator action from user sign-in and consent.
+
 For repricing use `tixbit sell reprice --file reprice.json`, with
 `{"listingId":"OWNED_ID","priceCents":11000}`. To remove an unsold listing,
 use `tixbit sell delist --file delist.json`, with `{"listingId":"OWNED_ID"}`.

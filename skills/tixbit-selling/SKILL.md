@@ -38,6 +38,13 @@ Obtain the operator-approved **public OAuth client ID** from TixBit. A client ID
 is not a secret; registration alone does not grant seller access. Do not create
 credentials or change auth settings on the user's behalf.
 
+For first-time operator setup, use TixBit's
+[explicit client provisioning procedure](https://github.com/tixbit/tixbit-monorepo/blob/main/docs/runbooks/mcp-cli-provisioning.md).
+It previews without credentials and can create the public ID offline using the
+existing signing key, before any allowlist exists. It never grants user access
+or edits configuration. Prefer an existing approved matching client; operators
+must separately approve provisioning and adding its exact ID to both allowlists.
+
 ```sh
 tixbit sell login --client-id "$TIXBIT_SELLER_CLIENT_ID"
 ```
