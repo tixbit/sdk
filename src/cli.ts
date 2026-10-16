@@ -13,6 +13,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Command } from "commander";
+import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { SellerClient, SellerError, DEFAULT_SELLER_CLIENT_ID, normalizeSellerOperation, type SellerOperation } from "./seller.js";
 import { assertMppChallenge, positiveInteger, redact, usdCents } from "./safety.js";
 import { createRequire } from "node:module";
 import { normalizePurchaseTicketsParams, TixBitClient } from "./client.js";
@@ -39,6 +42,7 @@ const packageJson = createRequire(import.meta.url)("../package.json") as {
 // ── Output helpers ──────────────────────────────────────────────────────────
 
 function output(data: unknown, json: boolean): void {
+  data = JSON.parse(JSON.stringify(data, (key, value) => /nonce|verifier/i.test(key) ? "[REDACTED]" : value));
   data = redact(data, [process.env.TIXBIT_LINK_TOKEN ?? "", process.env.TIXBIT_ACCESS_TOKEN ?? "", process.env.MPPX_PRIVATE_KEY ?? ""]);
   if (data && typeof data === "object" && !Array.isArray(data)) {
     data = { success: true, ...data };
@@ -122,6 +126,10 @@ function formatItem(item: unknown): string {
 }
 
 function handleError(err: unknown): never {
+  if (err instanceof SellerError) {
+    output({ success: false, error: { code: err.code, message: err.message, retryable: err.retryable }, action: err.action }, true);
+    process.exit(1);
+  }
   const msg = err instanceof TypeError || err instanceof RangeError ? err.message : "Request failed. Check input and service availability; do not retry an uncertain write.";
   output({ success: false, error: { code: "COMMAND_FAILED", message: msg } }, true);
   process.exit(1);
@@ -131,7 +139,7 @@ function handleError(err: unknown): never {
 
 const program = new Command()
   .name("tixbit")
-  .description("Search events, browse listings, and buy TixBit tickets")
+  .description("Search events, buy tickets, and manage your own seller listings")
   .version(packageJson.version);
 
 // ── search ──────────────────────────────────────────────────────────────────
@@ -360,32 +368,68 @@ program.command("buy <listingId>")
     } catch (error) { handleError(error); }
   });
 
-const sell = program.command("sell").description("Seller browser sign-in or optional authorized user integration");
-sell.command("list").option("--json", "Output JSON", true)
-  .action(async () => {
-    try { output(await client.listSellerListings(process.env.TIXBIT_ACCESS_TOKEN ?? ""), true); }
-    catch (error) { handleError(error); }
-  });
-sell.command("create").option("--confirm", "Approve listing creation and seller terms", false)
-  .option("--json", "Output JSON", true)
-  .action(async (opts: { confirm: boolean }) => {
-    try {
-      if (!opts.confirm) throw new TypeError("sell create requires --confirm and approved listing JSON on stdin");
-      if (!process.env.TIXBIT_ACCESS_TOKEN) {
-        output(await client.listSellerListings(), true);
-        return;
-      }
-      if (process.stdin.isTTY) throw new TypeError("Provide listing JSON on stdin");
-      let input = "";
-      for await (const chunk of process.stdin) {
-        input += chunk.toString();
-        if (Buffer.byteLength(input) > 65536) throw new TypeError("Listing JSON exceeds 64 KiB");
-      }
+const seller = new SellerClient();
+const sell = program.command("sell").description("Sign in, review and confirm seller inventory changes");
+const sellerAction = (fn: (...args: any[]) => Promise<unknown>) => async (...args: any[]) => {
+  try { output(await fn(...args), true); } catch (error) { handleError(error); }
+};
+async function readSellerInput(file?: string): Promise<string> {
+  if (file) {
+    const input = await readFile(file, "utf8");
+    if (Buffer.byteLength(input) > 65536) throw new TypeError("Input exceeds 64 KiB");
+    return input;
+  }
+  if (process.stdin.isTTY) process.stderr.write("Paste input, then press Ctrl-D to finish.\n");
+  let input = "";
+  for await (const chunk of process.stdin) {
+    input += chunk.toString();
+    if (Buffer.byteLength(input) > 65536) throw new TypeError("Input exceeds 64 KiB");
+  }
+  return input;
+}
+sell.command("capabilities").description("Discover public seller support, limits and configuration readiness")
+  .action(sellerAction(() => seller.capabilities()));
+sell.command("login").description("Authorize the CLI through browser OAuth with PKCE; no browser cookies or manual tokens")
+  .option("--client-id <id>", "Override the built-in public OAuth client ID (or TIXBIT_SELLER_CLIENT_ID)")
+  .option("--complete", "Read the full callback URL from stdin and securely finish authorization")
+  .action(sellerAction(async (opts: { clientId?: string; complete?: boolean }) => {
+    if (opts.complete) return seller.completeLogin(await readSellerInput());
+    const clientId = opts.clientId ?? process.env.TIXBIT_SELLER_CLIENT_ID ?? DEFAULT_SELLER_CLIENT_ID;
+    return seller.startLogin(clientId);
+  }));
+sell.command("auth-status").description("Check local login expiry without exposing credentials")
+  .action(sellerAction(() => seller.authStatus()));
+sell.command("logout").description("Remove local CLI credentials; account grants can be revoked in TixBit")
+  .action(sellerAction(() => seller.logout()));
+sell.command("list").description("Read inventory owned by the signed-in seller")
+  .option("--json", "Output JSON", true).action(sellerAction(() => seller.inventory()));
+sell.command("status [listingId]").description("Read current owned listing status (or all inventory)")
+  .action(sellerAction((id?: string) => seller.status(id)));
+sell.command("review <reviewId>").description("Reconcile a saved review and any completed result")
+  .action(sellerAction((id: string) => seller.review(id)));
+sell.command("confirm <reviewId>").description("Submit exactly the saved preview; reuse the same review ID after an uncertain response")
+  .requiredOption("--confirm", "Approve this previously reviewed operation and seller terms")
+  .action(sellerAction((id: string, opts: { confirm: boolean }) => seller.confirm(id, opts.confirm)));
+sell.command("cancel <reviewId>").description("Abandon a prepared review without changing a listing")
+  .action(sellerAction((id: string) => seller.cancel(id)));
+for (const name of ["create", "reprice", "delist"] as const) {
+  sell.command(name).description(`${name === "create" ? "Prepare a listing" : name === "reprice" ? "Prepare a per-ticket price change" : "Prepare removal of an owned listing"}; JSON file or stdin, review before confirm`)
+    .option("--file <path>", "Read approved listing/operation JSON from a file (default stdin)")
+    .option("--attempt <uuid>", "Stable UUID v4 preparation attempt ID")
+    .option("--dry-run", "Validate locally and print preview; no authenticated requests")
+    .option("--json", "Output JSON", true)
+    .action(sellerAction(async (opts: { file?: string; attempt?: string; dryRun?: boolean }) => {
       let body: unknown;
-      try { body = JSON.parse(input); } catch { throw new TypeError("Invalid listing JSON on stdin"); }
-      output(await client.createSellerListing(body, process.env.TIXBIT_ACCESS_TOKEN ?? "", opts.confirm), true);
-    } catch (error) { handleError(error); }
-  });
+      try { body = JSON.parse(await readSellerInput(opts.file)); } catch (error) {
+        if (error instanceof SyntaxError) throw new TypeError("Invalid seller JSON. Use --help for input options.");
+        throw error;
+      }
+      const operation: SellerOperation = `seller.${name}`;
+      const normalized = normalizeSellerOperation(operation, body);
+      if (opts.dryRun) return { dryRun: true, operation, body: normalized, action: "Validate event, date, section, seats, per-ticket USD price and terms with the seller. Omit --dry-run to obtain a server review; no listing was changed." };
+      return seller.prepare(operation, normalized, opts.attempt ?? randomUUID());
+    }));
+}
 
 // ── checkout ────────────────────────────────────────────────────────────────
 

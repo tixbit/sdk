@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +10,11 @@ beforeAll(() => {
 function run(args: string[], scenario = "ok", input = "", extraEnv: Record<string, string> = {}) {
   const dir = mkdtempSync(`${tmpdir()}/tixbit-cli-`);
   const log = `${dir}/requests.jsonl`;
+  if (extraEnv.TIXBIT_TEST_SELLER_SESSION === "1") {
+    const sessionDir = `${dir}/.config/tixbit/seller`;
+    mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    writeFileSync(`${sessionDir}/session.json`, JSON.stringify({ accessToken: "seller_fixture", expiresAt: Date.now() + 60000, clientId: "approved_fixture" }), { mode: 0o600 });
+  }
   try {
     const result = spawnSync(process.execPath, ["--import", resolve("tests/fixtures/mock-fetch.mjs"), process.env.TIXBIT_TEST_CLI ?? resolve("dist/cli.js"), ...args], {
       input, encoding: "utf8", timeout: 10000,
@@ -54,13 +59,11 @@ describe("mocked CLI wiring", () => {
     expect(r.data).toMatchObject({ success: false, status: "authorization_required", data: { checkoutUrl: "https://www.tixbit.com/checkout/process?listing=AbCd12&quantity=2" } });
     expect(r.data.action).toContain("Review and approve");
   });
-  it.each([["sell", "list"], ["sell", "create", "--confirm"]])("hands off seller sign-in without reading stdin or calling a protected API: %j", (...args) => {
-    const r = run(args, "ok", "", cleanAuth);
-    expect(r.status).toBe(2);
+  it("requires CLI OAuth without using environment or browser credentials", () => {
+    const r = run(["sell", "list"], "ok", "", cleanAuth);
+    expect(r.status).toBe(1);
     expect(r.calls).toHaveLength(0);
-    expect(r.data.status).toBe("authorization_required");
-    expect(r.data.data.signInUrl).toBe("https://www.tixbit.com/sign-in");
-    expect(r.data.action).not.toContain("TIXBIT_ACCESS_TOKEN");
+    expect(r.data.error.code).toBe("LOCAL_STATE_MISSING");
   });
   it("searches with exact IDs and JSON by default", () => {
     const r = run(["search", "Fixture", "--state", "GA"]);
@@ -102,17 +105,38 @@ describe("mocked CLI wiring", () => {
     expect(r.calls).toHaveLength(2);
     expect(r.data.action).toContain("Do not retry");
   });
-  it("lists and creates through gated seller API only", () => {
-    const listed = run(["sell", "list"]);
+  it("uses reviewed seller API and never accepts create --confirm as a bypass", () => {
+    const session = { TIXBIT_TEST_SELLER_SESSION: "1" };
+    const listed = run(["sell", "list"], "ok", "", session);
     expect(listed.status).toBe(0);
     expect(listed.calls[0].headers.Authorization).toBe("Bearer seller_fixture");
-    expect(run(["sell", "create"], "ok", "{}").calls).toHaveLength(0);
+    expect(listed.calls[0].url).toBe("https://mcp.tixbit.com/api/seller/inventory");
     expect(run(["sell", "create", "--confirm"], "ok", "{}").calls).toHaveLength(0);
     const body = { externalEventId: "AbCd12", section: "GA", quantity: 2, priceCents: 1000, generalAdmission: true, termsAccepted: true };
-    const created = run(["sell", "create", "--confirm"], "ok", JSON.stringify(body));
+    const dryRun = run(["sell", "create", "--dry-run"], "ok", JSON.stringify(body));
+    expect(dryRun.status).toBe(0);
+    expect(dryRun.calls).toHaveLength(0);
+    expect(dryRun.data).toMatchObject({ dryRun: true, operation: "seller.create", body });
+    const created = run(["sell", "create"], "ok", JSON.stringify(body), session);
     expect(created.status).toBe(0);
-    expect(created.calls[0].body).toEqual(body);
-    expect(created.data.data.status).toBe("pending");
+    expect(created.calls[0].body).toMatchObject({ operation: "seller.create", body });
+    expect(created.data.review.id).toBe("11111111-1111-4111-8111-111111111111");
+    expect(created.data.confirmation).toBeUndefined();
+    expect(created.calls).toHaveLength(1);
+  });
+  it("discovers public selling capabilities and starts browser login with the shipped public client", () => {
+    const caps = run(["sell", "capabilities"]);
+    expect(caps.status).toBe(0);
+    expect(caps.calls[0].headers.Authorization).toBeUndefined();
+    expect(caps.data.quantityUpdate).toBe(false);
+    const login = run(["sell", "login"]);
+    expect(login.status).toBe(0);
+    const signIn = new URL(login.data.signInUrl);
+    expect(signIn.origin).toBe("https://mcp.tixbit.com");
+    expect(signIn.searchParams.get("client_id")).toMatch(/^tixbit-client\./);
+    expect(signIn.searchParams.get("redirect_uri")).toBe("https://mcp.tixbit.com/cli/callback");
+    expect(signIn.searchParams.get("scope")).toBe("mcp:read inventory:read seller:write");
+    expect(login.calls).toHaveLength(0);
   });
   it.each([["--help"], ["--version"], ["url", "AbCd12", "--json"], ["browse"], ["listings", "AbCd12"], ["checkout", "AbCd12", "--quantity", "2"]])("preserves command %j with JSON", (...args) => {
     expect(run(args).status).toBe(0);
