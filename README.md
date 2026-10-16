@@ -8,7 +8,7 @@ No command requires a TixBit developer API key. Public discovery and links need 
 
 Run `tixbit auth` for public browser sign-in and wallet setup links. This command does not create a CLI session. Open the returned TixBit sign-in page, then complete checkout or selling in your browser. Do not copy browser cookies or bearer tokens.
 
-Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. The approved public CLI client is built into releases from 0.3.0; the TixBit account bridge must be available. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
+Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. The 0.3.0 release candidate includes an issued public CLI client, but 0.3.0 is not yet published, the client is not production-allowlisted, and seller account configuration is absent. Seller sign-in is not currently ready for end users. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
 
 For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. A Link spend request is a separate approval for a selected purchase. See [Link agent checkout](#link-agent-checkout).
 
@@ -159,9 +159,20 @@ Seller JSON uses the existing web API schema. Example after seller approval:
 
 ### Sell your own tickets
 
-Install `tixbit@0.3.0` or newer. Seller commands use the approved public CLI client
-built into the release; no developer API key or manual client configuration is
-needed. Verify server readiness with `sell capabilities` before signing in.
+Release prerequisites: `0.3.0` is an unpublished candidate. Its built-in public
+OAuth client has been issued, but has not been approved or allowlisted in
+production, and the seller account bridge is not configured. The commands below
+describe the intended workflow after publication and authorized server setup;
+they do not mean seller sign-in currently works.
+
+After a seller-capable `0.3.0` or newer release is published, install it with
+`npm install -g tixbit@latest` and verify `tixbit --version`. Installing today's
+published release does not install this candidate. Before signing in, operators
+must deploy the companion seller service, configure its account bridge and
+approve the exact built-in client in the required allowlists. Then check
+`sell capabilities`; `configured: true` alone does not prove this client or user
+has seller access. End users will not need a developer API key or manual client
+setup once those prerequisites are complete.
 
 ```sh
 tixbit sell --help
@@ -215,7 +226,8 @@ marketplace eligibility and sale-state checks still apply.
 
 The distributable [seller skill](skills/tixbit-selling/SKILL.md) includes exact
 workflows, installation and troubleshooting. Copy the complete directory into
-your agent's skills directory; it is included in npm package contents.
+your agent's skills directory; it is included in this candidate's package contents
+and will ship with the seller-capable npm release after publication.
 
 MPP `purchase` retains the official mppx path but now requires `--confirm`, `--max-price`, and an explicit `--idempotency-key` before wallet loading. Its challenge hook checks the pathUSD atomic amount before any credential is created, rejects unknown assets/recurring intents, and permits only one payment challenge. The cap covers the ticket charge; network fees, if any, are managed separately by the wallet. SDK callers who inject their own `paymentFetch` own its authorization policy: use `assertMppChallenge` in `onChallenge` as shown below and get user approval before calling `purchaseTickets`. Do not register credential-producing event handlers that bypass this hook.
 
@@ -480,7 +492,7 @@ Returns the full URL to the event page on `www.tixbit.com`.
 | `TIXBIT_EMAIL` | Optional alternative to `buy --email` | none |
 | `TIXBIT_LINK_TOKEN` | Optional advanced integration: user-approved Link credential; never an argument | none |
 | `TIXBIT_ACCESS_TOKEN` | Optional advanced integration: signed-in seller user credential, not an API key | none |
-| `TIXBIT_SELLER_CLIENT_ID` | Optional override for the built-in approved public OAuth client ID; not a secret | built-in CLI client |
+| `TIXBIT_SELLER_CLIENT_ID` | Optional override for the built-in issued public OAuth client ID; not a secret | built-in CLI client |
 | `TIXBIT_PAYMENT_URL` | Canonical MPP endpoint or loopback QA URL; no credentials, query, fragment, or redirects | `https://mcp.tixbit.com/api/purchase` |
 | `MPPX_PRIVATE_KEY` | Optional mppx account source; prefer the OS keychain | mppx keychain |
 

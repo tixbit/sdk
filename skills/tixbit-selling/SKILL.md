@@ -13,7 +13,17 @@ or disclose credentials.
 
 ## Install and discover
 
-Use Node.js 22.12+ and TixBit CLI 0.3.0 or newer:
+Current readiness: `0.3.0` is an unpublished release candidate. The built-in
+public OAuth client has been issued, but it has not been approved or allowlisted
+in production, and seller account configuration is absent. Do not promise that
+seller sign-in works or direct users to complete seller login yet. Public search
+can continue without OAuth.
+
+The following installation and workflows apply after TixBit publishes a
+seller-capable `0.3.0` or newer release and operators deploy/configure the
+companion seller service and approve its exact client in both required
+allowlists. Use Node.js 22.12+. `npm install -g tixbit@latest` installs the
+currently published version; it will not obtain this candidate before publication:
 
 ```sh
 npm install -g tixbit@latest
@@ -29,13 +39,18 @@ true` alone does not prove this user can sell.
 
 Copy the entire `tixbit-selling` directory into `$CODEX_HOME/skills/` (default
 `~/.codex/skills/`) for Codex, or `~/.claude/skills/` for Claude Code. Keep its
-`references` and `agents` directories. The npm package also includes this skill
-under `skills/tixbit-selling`.
+`references` and `agents` directories. The candidate package includes this skill
+under `skills/tixbit-selling`; it becomes available through npm when the
+seller-capable release is published.
 
 ## Sign in on this machine
 
-The CLI includes TixBit's approved public OAuth client. No developer API key or
-manual client setup is needed. Sign in with:
+Proceed only after the release and operator configuration prerequisites above
+are complete. The candidate includes an issued public OAuth client; issuance
+alone grants no production approval or access. Check `sell capabilities` and
+stop if support is unavailable. Even `configured: true` does not prove client
+approval or user eligibility. Once configured and approved, end users need no
+developer API key or manual client setup and can start login with:
 
 ```sh
 tixbit sell login
@@ -145,7 +160,10 @@ See [seller workflows](references/workflows.md) for repricing and delisting.
 
 ## Operator client configuration
 
-End users use the built-in public client. For a separate approved integration,
+The built-in public client is issued but not yet production-approved. Operators
+must separately authorize configuration and add its exact ID to the required
+allowlists; this skill does not perform those actions. Once ready, end users
+use that built-in client. For a separate approved integration,
 `--client-id` or `TIXBIT_SELLER_CLIENT_ID` overrides it. A client ID is public;
 registration alone grants no seller access. Operators can follow the
 [explicit client provisioning procedure](https://github.com/tixbit/tixbit-monorepo/blob/main/docs/runbooks/mcp-cli-provisioning.md).

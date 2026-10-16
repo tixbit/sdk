@@ -1,5 +1,12 @@
 # Seller workflows
 
+These workflows apply after publication of a seller-capable 0.3.0 or newer
+release and authorized production seller configuration/client allowlisting.
+The current candidate is unpublished; its issued public client is not yet
+production-approved, and account configuration is absent. Do not attempt seller
+sign-in or mutations until those prerequisites are complete.
+
+
 ## Reprice owned tickets
 
 ```sh

@@ -2,9 +2,9 @@
 
 | Result | Next action |
 | --- | --- |
-| `sell` missing | Obtain a seller-capable release and verify `sell --help`. |
+| `sell` missing / npm still installs an older release | 0.3.0 is currently unpublished. Wait for a seller-capable release, then verify the installed version and `sell --help`. |
 | Capabilities `configured: false` / HTTP 503 | Stop seller work. Operator approval/configuration of account bridge, SQLite, keys and exact client allowlist is required. Public search can continue. |
-| Client/scopes rejected | Update to the latest CLI and remove unintended client ID overrides; the built-in public client uses the exact HTTPS callback. Do not self-register to bypass approval. |
+| Client/scopes rejected | The issued built-in client is not yet production-approved or allowlisted. Stop and ask the operator to complete authorized setup; updating the CLI alone does not grant access. Do not self-register to bypass approval. |
 | Repeated browser sign-in | Operator checks canonical origins, matching Privy app and verified-session cookies. Never copy browser tokens. |
 | Callback/state invalid | Restart login on the same machine. Paste the full URL through stdin in `sell login --complete`; never remove state or use a bare code. |
 | HTTP 401 / expired session | Sign in again and review permissions. |
