@@ -8,7 +8,7 @@ No command requires a TixBit developer API key. Public discovery and links need 
 
 Run `tixbit auth` for public browser sign-in and wallet setup links. This command does not create a CLI session. Open the returned TixBit sign-in page, then complete checkout or selling in your browser. Do not copy browser cookies or bearer tokens.
 
-Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. This needs a separately approved public CLI client and configured TixBit account bridge. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
+Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. The approved public CLI client is built into releases from 0.3.0; the TixBit account bridge must be available. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
 
 For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. A Link spend request is a separate approval for a selected purchase. See [Link agent checkout](#link-agent-checkout).
 
@@ -159,14 +159,14 @@ Seller JSON uses the existing web API schema. Example after seller approval:
 
 ### Sell your own tickets
 
-These commands require the companion seller server release; verify command and
-server support before use. This source change does not publish an npm release
-or configure account access.
+Install `tixbit@0.3.0` or newer. Seller commands use the approved public CLI client
+built into the release; no developer API key or manual client configuration is
+needed. Verify server readiness with `sell capabilities` before signing in.
 
 ```sh
 tixbit sell --help
 tixbit sell capabilities
-tixbit sell login --client-id "$TIXBIT_SELLER_CLIENT_ID"
+tixbit sell login
 # Open signInUrl, sign in, review consent, then paste full callback on stdin:
 tixbit sell login --complete
 tixbit sell auth-status
@@ -480,7 +480,7 @@ Returns the full URL to the event page on `www.tixbit.com`.
 | `TIXBIT_EMAIL` | Optional alternative to `buy --email` | none |
 | `TIXBIT_LINK_TOKEN` | Optional advanced integration: user-approved Link credential; never an argument | none |
 | `TIXBIT_ACCESS_TOKEN` | Optional advanced integration: signed-in seller user credential, not an API key | none |
-| `TIXBIT_SELLER_CLIENT_ID` | Operator-approved public OAuth client ID for `sell login`; not a secret | none |
+| `TIXBIT_SELLER_CLIENT_ID` | Optional override for the built-in approved public OAuth client ID; not a secret | built-in CLI client |
 | `TIXBIT_PAYMENT_URL` | Canonical MPP endpoint or loopback QA URL; no credentials, query, fragment, or redirects | `https://mcp.tixbit.com/api/purchase` |
 | `MPPX_PRIVATE_KEY` | Optional mppx account source; prefer the OS keychain | mppx keychain |
 

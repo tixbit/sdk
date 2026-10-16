@@ -4,7 +4,7 @@
 | --- | --- |
 | `sell` missing | Obtain a seller-capable release and verify `sell --help`. |
 | Capabilities `configured: false` / HTTP 503 | Stop seller work. Operator approval/configuration of account bridge, SQLite, keys and exact client allowlist is required. Public search can continue. |
-| Client/scopes rejected | Verify operator-provided public client ID and exact HTTPS callback. Do not self-register to bypass approval. |
+| Client/scopes rejected | Update to the latest CLI and remove unintended client ID overrides; the built-in public client uses the exact HTTPS callback. Do not self-register to bypass approval. |
 | Repeated browser sign-in | Operator checks canonical origins, matching Privy app and verified-session cookies. Never copy browser tokens. |
 | Callback/state invalid | Restart login on the same machine. Paste the full URL through stdin in `sell login --complete`; never remove state or use a bare code. |
 | HTTP 401 / expired session | Sign in again and review permissions. |

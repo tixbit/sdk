@@ -13,17 +13,17 @@ or disclose credentials.
 
 ## Install and discover
 
-Use Node.js 22.12+ and a CLI release containing `sell login` and `sell confirm`:
+Use Node.js 22.12+ and TixBit CLI 0.3.0 or newer:
 
 ```sh
-npm install -g tixbit
+npm install -g tixbit@latest
 tixbit --version
 tixbit sell --help
 tixbit sell capabilities
 ```
 
 If `sell` is missing, stop and obtain the seller-capable release from TixBit.
-Do not assume older or currently published versions include unreleased commands.
+Older releases before 0.3.0 do not include this reviewed selling workflow.
 Capabilities report operations, limits and bridge configuration; `configured:
 true` alone does not prove this user can sell.
 
@@ -34,19 +34,11 @@ under `skills/tixbit-selling`.
 
 ## Sign in on this machine
 
-Obtain the operator-approved **public OAuth client ID** from TixBit. A client ID
-is not a secret; registration alone does not grant seller access. Do not create
-credentials or change auth settings on the user's behalf.
-
-For first-time operator setup, use TixBit's
-[explicit client provisioning procedure](https://github.com/tixbit/tixbit-monorepo/blob/main/docs/runbooks/mcp-cli-provisioning.md).
-It previews without credentials and can create the public ID offline using the
-existing signing key, before any allowlist exists. It never grants user access
-or edits configuration. Prefer an existing approved matching client; operators
-must separately approve provisioning and adding its exact ID to both allowlists.
+The CLI includes TixBit's approved public OAuth client. No developer API key or
+manual client setup is needed. Sign in with:
 
 ```sh
-tixbit sell login --client-id "$TIXBIT_SELLER_CLIENT_ID"
+tixbit sell login
 ```
 
 Open the returned `signInUrl` in the user's browser. The user signs in
@@ -150,3 +142,12 @@ See [seller workflows](references/workflows.md) for repricing and delisting.
 - `sell logout` removes local credentials. Revoke the TixBit account connection
   to invalidate its server grant. Never post inventory to groups or contact
   buyers unless separately requested.
+
+## Operator client configuration
+
+End users use the built-in public client. For a separate approved integration,
+`--client-id` or `TIXBIT_SELLER_CLIENT_ID` overrides it. A client ID is public;
+registration alone grants no seller access. Operators can follow the
+[explicit client provisioning procedure](https://github.com/tixbit/tixbit-monorepo/blob/main/docs/runbooks/mcp-cli-provisioning.md).
+Do not create credentials, add allowlists or change authentication settings
+without operator authorization.

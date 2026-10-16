@@ -31,5 +31,5 @@ export type {
   LocationMode,
 } from "./types.js";
 
-export { SellerClient, SellerStore, SellerError, normalizeSellerOperation } from "./seller.js";
+export { SellerClient, SellerStore, SellerError, DEFAULT_SELLER_CLIENT_ID, normalizeSellerOperation } from "./seller.js";
 export type { SellerOperation } from "./seller.js";

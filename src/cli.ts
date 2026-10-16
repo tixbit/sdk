@@ -15,7 +15,7 @@
 import { Command } from "commander";
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { SellerClient, SellerError, normalizeSellerOperation, type SellerOperation } from "./seller.js";
+import { SellerClient, SellerError, DEFAULT_SELLER_CLIENT_ID, normalizeSellerOperation, type SellerOperation } from "./seller.js";
 import { assertMppChallenge, positiveInteger, redact, usdCents } from "./safety.js";
 import { createRequire } from "node:module";
 import { normalizePurchaseTicketsParams, TixBitClient } from "./client.js";
@@ -390,12 +390,11 @@ async function readSellerInput(file?: string): Promise<string> {
 sell.command("capabilities").description("Discover public seller support, limits and configuration readiness")
   .action(sellerAction(() => seller.capabilities()));
 sell.command("login").description("Authorize the CLI through browser OAuth with PKCE; no browser cookies or manual tokens")
-  .option("--client-id <id>", "Operator-approved public OAuth client ID (or TIXBIT_SELLER_CLIENT_ID)")
+  .option("--client-id <id>", "Override the built-in public OAuth client ID (or TIXBIT_SELLER_CLIENT_ID)")
   .option("--complete", "Read the full callback URL from stdin and securely finish authorization")
   .action(sellerAction(async (opts: { clientId?: string; complete?: boolean }) => {
     if (opts.complete) return seller.completeLogin(await readSellerInput());
-    const clientId = opts.clientId ?? process.env.TIXBIT_SELLER_CLIENT_ID;
-    if (!clientId) throw new SellerError("CLI_CLIENT_NOT_CONFIGURED", "An approved public OAuth client ID is required.", "Ask the TixBit operator for TIXBIT_SELLER_CLIENT_ID. Dynamic registration does not grant seller access automatically.");
+    const clientId = opts.clientId ?? process.env.TIXBIT_SELLER_CLIENT_ID ?? DEFAULT_SELLER_CLIENT_ID;
     return seller.startLogin(clientId);
   }));
 sell.command("auth-status").description("Check local login expiry without exposing credentials")

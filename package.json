@@ -1,6 +1,6 @@
 {
   "name": "tixbit",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Search events, buy tickets, and review and manage your own TixBit seller listings",
   "type": "module",
   "main": "./dist/index.js",

@@ -124,13 +124,18 @@ describe("mocked CLI wiring", () => {
     expect(created.data.confirmation).toBeUndefined();
     expect(created.calls).toHaveLength(1);
   });
-  it("discovers public selling capabilities and explains missing approved OAuth configuration", () => {
+  it("discovers public selling capabilities and starts browser login with the shipped public client", () => {
     const caps = run(["sell", "capabilities"]);
     expect(caps.status).toBe(0);
     expect(caps.calls[0].headers.Authorization).toBeUndefined();
     expect(caps.data.quantityUpdate).toBe(false);
     const login = run(["sell", "login"]);
-    expect(login.data.error.code).toBe("CLI_CLIENT_NOT_CONFIGURED");
+    expect(login.status).toBe(0);
+    const signIn = new URL(login.data.signInUrl);
+    expect(signIn.origin).toBe("https://mcp.tixbit.com");
+    expect(signIn.searchParams.get("client_id")).toMatch(/^tixbit-client\./);
+    expect(signIn.searchParams.get("redirect_uri")).toBe("https://mcp.tixbit.com/cli/callback");
+    expect(signIn.searchParams.get("scope")).toBe("mcp:read inventory:read seller:write");
     expect(login.calls).toHaveLength(0);
   });
   it.each([["--help"], ["--version"], ["url", "AbCd12", "--json"], ["browse"], ["listings", "AbCd12"], ["checkout", "AbCd12", "--quantity", "2"]])("preserves command %j with JSON", (...args) => {

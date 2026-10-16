@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 export const SELLER_ORIGIN = "https://mcp.tixbit.com";
 export const SELLER_CALLBACK = `${SELLER_ORIGIN}/cli/callback`;
+export const DEFAULT_SELLER_CLIENT_ID = "tixbit-client.eyJ0eXAiOiJjbGllbnQiLCJpYXQiOjE3OTIxOTI4MDAsImNsaWVudE5hbWUiOiJUaXhCaXQgQ0xJIiwicmVkaXJlY3RVcmlzIjpbImh0dHBzOi8vbWNwLnRpeGJpdC5jb20vY2xpL2NhbGxiYWNrIl0sInNjb3BlIjoibWNwOnJlYWQgaW52ZW50b3J5OnJlYWQgc2VsbGVyOndyaXRlIn0.C9ijXrH07kd2p15Dd1z5yzfVsz4XoBUJI90GP9Rbg7k";
 export const SELLER_SCOPES = "mcp:read inventory:read seller:write";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const disclosures = ["ada", "twenty_one_plus", "obstructed_view", "limited_view", "standing_room", "aisle_seat"];
@@ -165,9 +166,9 @@ export class SellerClient {
   async logout() { await this.store.remove("session.json"); await this.store.remove("login.json"); return { signedIn: false, action: "Local credentials removed. To revoke an existing grant, use your TixBit account connections." }; }
   async authStatus() {
     try { const session = await this.store.load<Session>("session.json"); return { signedIn: session.expiresAt > Date.now(), expiresAt: session.expiresAt, action: "Run sell list to validate current server access. Local status does not prove the grant is still active." }; }
-    catch { return { signedIn: false, action: "Run sell login with the operator-approved public OAuth client ID." }; }
+    catch { return { signedIn: false, action: "Run tixbit sell login to sign in with the built-in public CLI client." }; }
   }
-  async startLogin(clientId: string) {
+  async startLogin(clientId: string = DEFAULT_SELLER_CLIENT_ID) {
     text(clientId, "clientId", 8192);
     const pending: Pending = { clientId, state: randomBytes(32).toString("base64url"), verifier: randomBytes(32).toString("base64url"), expiresAt: Date.now() + 600000 };
     await this.store.save("login.json", pending);

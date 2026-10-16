@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, stat, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SellerClient, SellerStore, normalizeSellerOperation, SELLER_CALLBACK, SELLER_ORIGIN, SELLER_SCOPES } from "../src/seller.js";
+import { SellerClient, SellerStore, normalizeSellerOperation, SELLER_CALLBACK, SELLER_ORIGIN, SELLER_SCOPES, DEFAULT_SELLER_CLIENT_ID } from "../src/seller.js";
 
 const reviewId = "11111111-1111-4111-8111-111111111111";
 const attempt = "22222222-2222-4222-8222-222222222222";
@@ -109,6 +109,14 @@ describe("seller workflow contract", () => {
 });
 
 describe("CLI seller OAuth PKCE", () => {
+  it("starts end-user login with the approved shipped public client by default", async () => {
+    const { client, fetcher } = await setup();
+    const started = await client.startLogin();
+    const url = new URL(started.signInUrl);
+    expect(url.searchParams.get("client_id")).toBe(DEFAULT_SELLER_CLIENT_ID);
+    expect(DEFAULT_SELLER_CLIENT_ID).toMatch(/^tixbit-client\./);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("binds HTTPS callback, state, S256, resource and scopes; stores token privately and logs out", async () => {
     const { client, store, fetcher, dir } = await setup();
     const started = await client.startLogin(`tixbit-client.${"a".repeat(1000)}.signature`);
