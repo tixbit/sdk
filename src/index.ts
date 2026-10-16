@@ -30,3 +30,6 @@ export type {
   ParkingFilter,
   LocationMode,
 } from "./types.js";
+
+export { SellerClient, SellerStore, SellerError, normalizeSellerOperation } from "./seller.js";
+export type { SellerOperation } from "./seller.js";

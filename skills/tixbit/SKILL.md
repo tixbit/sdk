@@ -5,6 +5,10 @@ description: Find live event tickets, prepare a capped checkout, and complete a 
 
 # TixBit tickets
 
+For the owner's seller inventory, listing creation, price changes or delisting,
+use [tixbit-selling](../tixbit-selling/SKILL.md). That skill requires a
+seller-capable CLI release and approved account OAuth access.
+
 TixBit is a secondary ticket marketplace. Prices can be above face value.
 Never fees for buyers. The listed total is the ticket charge.
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sell tickets with TixBit"
+  short_description: "Preview, list, reprice and delist your tickets"
+  default_prompt: "Use $tixbit-selling to review and manage my ticket listings with TixBit."

@@ -1,7 +1,7 @@
 {
   "name": "tixbit",
   "version": "0.2.4",
-  "description": "Search events, browse listings, view seatmaps, and purchase TixBit tickets through MPP",
+  "description": "Search events, buy tickets, and review and manage your own TixBit seller listings",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,6 +18,7 @@
     "dist/*.js",
     "dist/*.d.ts",
     "skills/tixbit/SKILL.md",
+    "skills/tixbit-selling/**",
     "README.md",
     "LICENSE"
   ],
