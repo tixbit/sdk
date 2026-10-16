@@ -99,9 +99,22 @@ export class SellerClient {
     } catch { throw new SellerError("SELLER_OUTCOME_UNKNOWN", "The seller service response was not received.", "For a confirm, retry the SAME review ID. For prepare, check inventory before preparing another attempt.", true); }
     const data = await response.json().catch(() => null) as any;
     if (!response.ok) {
-      const known: Record<number, string> = { 401: "Run sell login to authorize this CLI.", 403: "Check seller ownership and granted scopes. Sign in to the correct account.", 404: "Check the ID or service configuration.", 409: "Read inventory and review status before retrying.", 503: "Ask the operator to enable the seller bridge and approved CLI OAuth client." };
-      const code = typeof data?.error?.code === "string" && /^[A-Z_]{2,80}$/.test(data.error.code) ? data.error.code : `SELLER_HTTP_${response.status}`;
-      throw new SellerError(code, `Seller request failed (HTTP ${response.status}).`, known[response.status] ?? "Check command input and service status.", response.status >= 500);
+      const errors: Record<string, { message: string; action: string }> = {
+        authentication_required: { message: "Seller sign-in is required.", action: "Run tixbit sell login to authorize this CLI." },
+        seller_unavailable: { message: "Seller account support is not configured.", action: "Ask the operator to configure the seller account bridge and approved OAuth client." },
+        permission_required: { message: "Current seller account permission is required.", action: "Check seller ownership, sign in to the correct account, and reconnect to grant inventory:read and seller:write." },
+        invalid_request: { message: "The seller request is invalid.", action: "Check required fields, exact event and seat IDs, quantity, price in cents and UUID attempt. Correct the request before preparing again." },
+        invalid_content_type: { message: "The seller request requires JSON.", action: "Use the documented CLI JSON input or send application/json to the API." },
+        account_unavailable: { message: "The seller account service is temporarily unavailable.", action: path === "/api/seller/confirm" ? "Read review status and inventory before retrying. Retain the SAME review ID and confirmation; do not prepare a new mutation attempt." : "Retry the read when service recovers. For preparation, reconcile inventory and the existing attempt before preparing again." },
+        review_or_listing_unavailable: { message: "The review or owned listing is unavailable.", action: "Run sell list to refresh owned inventory. Use an owned listing or review ID and check that the review has not expired." },
+        review_conflict: { message: "The seller review changed, expired or requires reconciliation.", action: "Read sell review and sell list. Retain the existing confirmation; never repeat an uncertain mutation with a new attempt." },
+      };
+      const code = typeof data?.error?.code === "string" && Object.hasOwn(errors, data.error.code) ? data.error.code as string : null;
+      if (code) {
+        const known = errors[code]!;
+        throw new SellerError(code, known.message, known.action, data.error.retryable === true);
+      }
+      throw new SellerError(`SELLER_HTTP_${response.status}`, `Seller request failed (HTTP ${response.status}).`, "Check command input and service status. Reconcile review status and inventory before retrying any mutation.", false);
     }
     if (!data || typeof data !== "object" || Array.isArray(data)) throw new SellerError("INVALID_SELLER_RESPONSE", "Seller service returned an invalid response.", "Check review status and inventory before another attempt.");
     return redact(data, [token ?? ""]);

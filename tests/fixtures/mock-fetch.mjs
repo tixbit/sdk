@@ -16,12 +16,12 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.pathname === "/api/seller/confirm") {
     const marker = process.env.TIXBIT_TEST_LOG + ".lost";
     if (scenario === "seller-uncertain" && !existsSync(marker)) { writeFileSync(marker, "1"); throw new Error("seller_fixture"); }
-    return Response.json({ listing: { listingId: "sl_fixture", status: "active" } });
+    return Response.json({ listing: { listingId: "sl_fixture", status: "live" } });
   }
   if (url.pathname === "/api/seller/cancel") return Response.json({ cancelled: true });
-  if (url.pathname.startsWith("/api/seller/reviews/")) return Response.json({ review: { id: "11111111-1111-4111-8111-111111111111", status: "completed", operation: "seller.create" } });
+  if (url.pathname.startsWith("/api/seller/reviews/")) return Response.json({ review: { id: "11111111-1111-4111-8111-111111111111", status: "complete", operation: "seller.create" } });
   if (url.pathname === "/api/seller/capabilities") return Response.json({ configured: true, quantityUpdate: false });
-  if (url.pathname === "/api/seller/inventory") return Response.json({ listings: [{ listingId: "sl_fixture", status: "active" }] });
+  if (url.pathname === "/api/seller/inventory") return Response.json({ listings: [{ listingId: "sl_fixture", status: "live" }] });
   if (url.pathname === "/api/seller/prepare") return Response.json({ review: { id: "11111111-1111-4111-8111-111111111111", operation: { name: body.operation, body: body.body }, expiresAt: Date.now() + 60000 }, confirmation: { reviewId: "11111111-1111-4111-8111-111111111111", nonce: "x".repeat(43) } });
   if (url.pathname === "/api/sell/listings") return Response.json({ success: true, data: { listings: [], ...(body ? { listingId: "sl_fixture", status: "pending" } : {}), accessToken: "seller_fixture", message: "seller_fixture" } });
   if (url.pathname.startsWith("/api/listings/")) return Response.json({ success: true, listing: { id: "AbCd12", quantity: 2, price: 12.5 } });

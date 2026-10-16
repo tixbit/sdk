@@ -6,7 +6,7 @@ import { SellerClient, SellerStore, normalizeSellerOperation, SELLER_CALLBACK, S
 
 const reviewId = "11111111-1111-4111-8111-111111111111";
 const attempt = "22222222-2222-4222-8222-222222222222";
-const listing = { listingId: "sl_fixture", status: "active", quantity: 2, priceCents: 10000 };
+const listing = { listingId: "sl_fixture", status: "live", quantity: 2, priceCents: 10000 };
 const body = { externalEventId: "event-Fixture", section: "101", row: "B", seatNumbers: ["1", "2"], quantity: 2, priceCents: 10000, termsAccepted: true };
 const dirs: string[] = [];
 afterEach(async () => { await Promise.all(dirs.splice(0).map(d => rm(d, { recursive: true, force: true }))); });
@@ -58,7 +58,7 @@ describe("seller workflow contract", () => {
       const input = operation === "seller.reprice" ? { listingId: "sl_fixture", priceCents: 12000 } : { listingId: "sl_fixture" };
       fetcher.mockResolvedValueOnce(Response.json(prepared(operation, input)));
       await client.prepare(operation as any, input, `${index + 3}2222222-2222-4222-8222-222222222222`);
-      fetcher.mockResolvedValueOnce(Response.json({ listing: { ...listing, status: operation === "seller.delist" ? "delisted" : "active" } }));
+      fetcher.mockResolvedValueOnce(Response.json({ listing: { ...listing, status: operation === "seller.delist" ? "delisted" : "live" } }));
       await client.confirm(reviewId, true);
     }
   });
@@ -68,11 +68,34 @@ describe("seller workflow contract", () => {
     await expect(client.prepare("seller.create", body, attempt)).rejects.toMatchObject({ code: "SELLER_OUTCOME_UNKNOWN" });
     await expect(client.prepare("seller.create", body, attempt)).rejects.toMatchObject({ code: "ATTEMPT_ALREADY_SENT" });
     expect(fetcher).toHaveBeenCalledTimes(1);
-    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "OWNERSHIP_DENIED", message: "secret_fixture", action: "secret_fixture" } }, { status: 403 }));
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "permission_required", message: "secret_fixture", action: "secret_fixture" } }, { status: 403 }));
     const error = await client.inventory().catch(e => e);
-    expect(error.code).toBe("OWNERSHIP_DENIED");
+    expect(error.code).toBe("permission_required");
     expect(error.action).toContain("ownership");
     expect(String(error)).not.toContain("secret_fixture");
+  });
+  it.each([
+    ["review_conflict", 409, false, "Retain the existing confirmation"],
+    ["account_unavailable", 503, false, "SAME review ID"],
+    ["invalid_request", 400, false, "price in cents"],
+    ["permission_required", 403, false, "ownership"],
+  ])("preserves recognized lowercase API code %s with static safe recovery", async (code, status, retryable, recovery) => {
+    const { client, store, fetcher } = await setup(); await session(store);
+    await store.save(`review-${reviewId}.json`, prepared());
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code, retryable, message: "secret_fixture reflected message", action: "secret_fixture reflected action" } }, { status }));
+    const error = await client.confirm(reviewId, true).catch(e => e);
+    expect(error).toMatchObject({ code, retryable });
+    expect(error.action).toContain(recovery);
+    expect(JSON.stringify({ message: error.message, action: error.action })).not.toContain("secret_fixture");
+  });
+  it("honors recognized retryable reads but discards unknown server codes and guidance", async () => {
+    const { client, store, fetcher } = await setup(); await session(store);
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "account_unavailable", retryable: true } }, { status: 503 }));
+    await expect(client.inventory()).rejects.toMatchObject({ code: "account_unavailable", retryable: true });
+    fetcher.mockResolvedValueOnce(Response.json({ error: { code: "secret_fixture", message: "secret_fixture", action: "secret_fixture", retryable: true } }, { status: 503 }));
+    const error = await client.inventory().catch(e => e);
+    expect(error).toMatchObject({ code: "SELLER_HTTP_503", retryable: false });
+    expect(JSON.stringify({ message: error.message, action: error.action })).not.toContain("secret_fixture");
   });
   it("only reports owned inventory and cancels preparation without delisting", async () => {
     const { client, store, fetcher } = await setup(); await session(store);

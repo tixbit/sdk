@@ -34,8 +34,8 @@ describe("seller CLI mocked browser-to-listing journey", () => {
       expect(run(["confirm", id]).code).toBe(1);
       expect(run(["confirm", id, "--confirm"]).data.error.code).toBe("SELLER_OUTCOME_UNKNOWN");
       expect(run(["confirm", id, "--confirm"]).data.listing.listingId).toBe("sl_fixture");
-      expect(run(["review", id]).data.review.status).toBe("completed");
-      expect(run(["status", "sl_fixture"]).data.listing.status).toBe("active");
+      expect(run(["review", id]).data.review.status).toBe("complete");
+      expect(run(["status", "sl_fixture"]).data.listing.status).toBe("live");
       for (const [operation, input] of [["reprice", { listingId: "sl_fixture", priceCents: 14000 }], ["delist", { listingId: "sl_fixture" }]] as const) {
         expect(run([operation], JSON.stringify(input)).data.review.id).toBe(id);
         expect(run(["confirm", id, "--confirm"]).code).toBe(0);
