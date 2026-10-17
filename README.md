@@ -8,7 +8,7 @@ No command requires a TixBit developer API key. Public discovery and links need 
 
 Run `tixbit auth` for public browser sign-in and wallet setup links. This command does not create a CLI session. Open the returned TixBit sign-in page, then complete checkout or selling in your browser. Do not copy browser cookies or bearer tokens.
 
-Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. The 0.3.0 release candidate includes an issued public CLI client, but 0.3.0 is not yet published, the client is not production-allowlisted, and seller account configuration is absent. Seller sign-in is not currently ready for end users. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
+Seller-capable builds use `tixbit sell login` for browser OAuth with PKCE and explicit seller consent. CLI 0.3.0 or newer includes a public OAuth client and requires an enabled seller connection. Run `sell capabilities` before signing in; if `configured` is false or the endpoint is unavailable, operator setup is still pending. Website sign-in alone does not create a CLI session. The `buy` web checkout route does not issue Link spend requests; it expects a token from an authorized integration.
 
 For wallet setup, use [official Link onboarding](https://link.com/agents): install `@stripe/link-cli` and run `link-cli onboard`. This requires your Link account, not a developer API key. A Link spend request is a separate approval for a selected purchase. See [Link agent checkout](#link-agent-checkout).
 
@@ -159,20 +159,17 @@ Seller JSON uses the existing web API schema. Example after seller approval:
 
 ### Sell your own tickets
 
-Release prerequisites: `0.3.0` is an unpublished candidate. Its built-in public
-OAuth client has been issued, but has not been approved or allowlisted in
-production, and the seller account bridge is not configured. The commands below
-describe the intended workflow after publication and authorized server setup;
-they do not mean seller sign-in currently works.
+Seller commands require CLI `0.3.0` or newer and an enabled seller connection.
+Install with `npm install -g tixbit@latest`, verify `tixbit --version`, and run
+`sell capabilities` before signing in. If `configured: false` or the endpoint
+is unavailable, operator setup or deployment is still pending; public discovery
+can continue. `configured: true` alone does not prove client approval or user
+eligibility.
 
-After a seller-capable `0.3.0` or newer release is published, install it with
-`npm install -g tixbit@latest` and verify `tixbit --version`. Installing today's
-published release does not install this candidate. Before signing in, operators
-must deploy the companion seller service, configure its account bridge and
-approve the exact built-in client in the required allowlists. Then check
-`sell capabilities`; `configured: true` alone does not prove this client or user
-has seller access. End users will not need a developer API key or manual client
-setup once those prerequisites are complete.
+The CLI includes a public OAuth client, so end users need no developer API key
+or manual client setup once the companion seller service and account bridge
+are enabled and the exact client has been approved in the required allowlists.
+The workflow below applies when those prerequisites are satisfied.
 
 ```sh
 tixbit sell --help
@@ -226,8 +223,8 @@ marketplace eligibility and sale-state checks still apply.
 
 The distributable [seller skill](skills/tixbit-selling/SKILL.md) includes exact
 workflows, installation and troubleshooting. Copy the complete directory into
-your agent's skills directory; it is included in this candidate's package contents
-and will ship with the seller-capable npm release after publication.
+your agent's skills directory; the complete skill is included in the seller-capable
+npm package.
 
 MPP `purchase` retains the official mppx path but now requires `--confirm`, `--max-price`, and an explicit `--idempotency-key` before wallet loading. Its challenge hook checks the pathUSD atomic amount before any credential is created, rejects unknown assets/recurring intents, and permits only one payment challenge. The cap covers the ticket charge; network fees, if any, are managed separately by the wallet. SDK callers who inject their own `paymentFetch` own its authorization policy: use `assertMppChallenge` in `onChallenge` as shown below and get user approval before calling `purchaseTickets`. Do not register credential-producing event handlers that bypass this hook.
 
