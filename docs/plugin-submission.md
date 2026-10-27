@@ -29,12 +29,12 @@ Starter prompts:
 
 Release notes: Initial skills bundle for event discovery, listing comparison,
 venue sections, browser checkout links, and public Node.js SDK integration.
-Uses the published tixbit 0.1.1 package. Requires no developer API key. No machine
+Uses the published tixbit 0.4.0 package. Requires no developer API key. No machine
 payments, seller actions, or MCP transport are included in this bundle.
 
 ## Reviewer cases
 
-All cases require a Node.js 20+ environment, npm registry access, and public
+All cases require a Node.js 22.12+ environment, npm registry access, and public
 HTTPS access to TixBit. No test account or payment credentials are required.
 Live inventory changes; discover an upcoming event at test time and reuse its
 returned IDs. No case completes a purchase. These are reviewer scenarios, not
@@ -46,7 +46,7 @@ claims that a model behavior evaluation has passed.
 | Compare two available listings for the first matching game. | Fetch listings for the selected event; return only current section, row, price, quantity, and disclosures. Clarify ambiguous selection. |
 | Show the sections for that event. | Fetch seatmap using the same event ID; return venue and section names, or explain unavailable map data. |
 | Give me a checkout link for two tickets from a listing that allows two. | Check returned quantity rules and get a browser checkout URL; explain it has not purchased or reserved tickets. |
-| Add TixBit event search and a browser checkout preview to a Node.js app. | integrate-sdk uses tixbit@0.1.1 and the bundled example, handles empty arrays/errors, and returns a TixBit checkout URL without payment. |
+| Add TixBit event search and a browser checkout preview to a Node.js app. | integrate-sdk uses tixbit@0.4.0 and the bundled example, handles empty arrays/errors, and returns a TixBit checkout URL without payment. |
 
 | Negative prompt or scenario | Expected behavior and reason |
 | --- | --- |
@@ -56,7 +56,14 @@ claims that a model behavior evaluation has passed.
 
 ## Verified technical checks
 
-On 2026-09-22, npm reported latest `tixbit` as 0.1.1; SDK main was
+On 2026-10-27, the plugin was repinned to `tixbit@0.4.0`, released from this
+repository with the plugin. Read-only search, listings, seatmap, and checkout
+URL commands, and the bundled SDK example, passed against the 0.4.0 build; a
+Braves search returned a parking-pass event without listings first, so the
+skills and example now skip events whose `has_listings` is false. The 0.4.0
+package requires Node.js 22.12+.
+
+Earlier record: on 2026-09-22, npm reported latest `tixbit` as 0.1.1; SDK main was
 `df69683b8548f6833d9eca4b469c9cabf144f64c` with package version 0.1.2.
 The plugin deliberately uses the published version's discovery API.
 
