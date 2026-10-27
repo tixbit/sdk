@@ -2,7 +2,7 @@
 
 A skills-only plugin for ChatGPT and Codex. Find event tickets, compare listings
 and venue sections, generate browser checkout links, or integrate the public
-TixBit SDK into Node.js applications. Requires Node.js 20+, npm, and HTTPS access.
+TixBit SDK into Node.js applications. Requires Node.js 22.12+, npm, and HTTPS access.
 No TixBit developer key is required. Users complete payment on the TixBit website.
 
 ## Package
@@ -24,8 +24,9 @@ PYCODE
 The archive includes a portable root `plugin.json`, a Codex compatibility
 manifest, two skills, their reference example, a logo, and the MIT license.
 It contains no MCP configuration, credentials, hooks, or SDK runtime binaries.
-The skills install/use `tixbit@0.1.1`, the published npm release verified on
-2026-09-22. Source version 0.1.2 has not been published to npm as of that check.
+The skills install/use `tixbit@0.4.0`, the SDK release that ships this plugin.
+Its discovery commands and the bundled example were verified against the 0.4.0
+build on 2026-10-27. Earlier drafts (2026-09-22) pinned `tixbit@0.1.1`.
 
 Upload through **Skills only** at https://platform.openai.com/plugins.
 See `../../docs/plugin-submission.md` for listing copy and reviewer test cases.

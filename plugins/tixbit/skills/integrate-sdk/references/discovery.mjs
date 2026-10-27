@@ -4,15 +4,21 @@ const client = new TixBitClient({ baseUrl: "https://www.tixbit.com" });
 const { events } = await client.searchEvents({
   query: "Braves", city: "Atlanta", state: "GA", size: 5,
 });
-const event = events[0];
-if (!event) throw new Error("No matching event. Ask for broader search criteria.");
+// Search can include add-ons (for example season parking) and events without listings.
+const candidates = events.filter((item) => item.has_listings);
+if (candidates.length === 0) throw new Error("No matching event with listings. Ask for broader search criteria.");
 
-const { listings } = await client.getListings({
-  eventId: event.external_event_id, size: 10,
-});
 const quantity = 2;
-const listing = listings.find((item) => item.quantities_list.includes(quantity));
-if (!listing) throw new Error("No returned listing permits the requested quantity.");
+let event;
+let listing;
+for (const candidate of candidates) {
+  const { listings } = await client.getListings({
+    eventId: candidate.external_event_id, size: 10,
+  });
+  listing = listings.find((item) => item.quantities_list.includes(quantity));
+  if (listing) { event = candidate; break; }
+}
+if (!event || !listing) throw new Error("No returned listing permits the requested quantity.");
 
 // This is a preview URL. Let the user choose their listing before handing off.
 const checkout = client.createCheckoutLink({ listingId: listing.id, quantity });

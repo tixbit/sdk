@@ -6,14 +6,14 @@ description: Use when a developer asks to add TixBit event search, ticket listin
 # Integrate the TixBit SDK
 
 Inspect the project's package manager, runtime, and existing code first. Requires
-Node.js 20+ and network access to TixBit. Install the published version with the
-project's package manager, for example `npm install --save-exact tixbit@0.1.1`.
+Node.js 22.12+ and network access to TixBit. Install the published version with the
+project's package manager, for example `npm install --save-exact tixbit@0.4.0`.
 Keep this dependency local to the project. No API key is required.
 
-Version 0.1.1 is the verified published API for this plugin. Repository main may
-contain unreleased methods. Do not suggest `buyTickets`, `purchaseTickets`,
-`quoteListings`, seller APIs, or newer CLI commands based on repository docs.
-Use the installed package's declarations as the API authority.
+Version 0.4.0 is the verified published API for this plugin. It also exports
+`buyTickets`, `purchaseTickets`, `quoteListings`, and seller APIs; they are
+outside this plugin's scope, so do not suggest or use them. Use the installed
+package's declarations as the API authority.
 
 Use [the bundled example](references/discovery.mjs) for search, listings, and a
 browser checkout link. Adapt it to the app's data flow; do not introduce a new
@@ -21,7 +21,9 @@ framework or replace unrelated code. Validate positive integer ticket counts
 from 1 to 8 and match the listing's allowed quantity before returning checkout.
 Keep event/listing IDs intact. Never generate IDs from event names.
 
-Handle an empty event array, empty listings, request errors, and missing seatmaps.
+Search can return add-ons such as season parking passes and events whose
+`has_listings` is false; skip those rather than assuming the first result is
+buyable. Handle an empty event array, empty listings, request errors, and missing seatmaps.
 Do not infer current availability from search summaries alone. Present only
 returned facts and preserve price units. Checkout links do not reserve seats or
 charge the user. The browser checkout is the authority for the final amount and
